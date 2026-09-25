@@ -11,6 +11,7 @@ use actix_web::{
     Error as ActixError, FromRequest, HttpMessage, HttpRequest, HttpResponse,
     body::{BoxBody, MessageBody},
     dev::{Payload, ServiceRequest, ServiceResponse},
+    http::Method,
     middleware::Next,
 };
 use moka::future::Cache;
@@ -127,15 +128,40 @@ impl PrincipalResolver {
     }
 }
 
+/// Operations which may be performed using an API key, as method and path suffix.
+const API_KEY_OPERATIONS: &[(Method, &str)] = &[(Method::POST, "/v3/sbom")];
+
+/// Check if the request is not made using an API key, or is allowed for API keys.
+fn api_key_allowed(req: &ServiceRequest) -> bool {
+    let is_api_key = matches!(
+        req.extensions().get::<UserInformation>(),
+        Some(UserInformation::Authenticated(details)) if details.api_key.is_some()
+    );
+
+    !is_api_key
+        || API_KEY_OPERATIONS
+            .iter()
+            .any(|(method, path)| req.method() == method && req.path().ends_with(path))
+}
+
 /// Middleware resolving the [`Principal`] of an authenticated request.
 ///
 /// This must run after the authentication middleware. Requests by a disabled user will be
-/// rejected with `401`.
+/// rejected with `401`. Requests using an API key are rejected with `403`, unless they perform an
+/// operation allowed for API keys.
 pub async fn resolve_principal(
     resolver: Arc<PrincipalResolver>,
     req: ServiceRequest,
     next: Next<impl MessageBody + 'static>,
 ) -> Result<ServiceResponse<BoxBody>, ActixError> {
+    if !api_key_allowed(&req) {
+        let response = HttpResponse::Forbidden().json(ErrorInformation::new(
+            "Forbidden",
+            "API keys can only be used for uploading SBOMs",
+        ));
+        return Ok(req.into_response(response).map_into_boxed_body());
+    }
+
     let identity = match req.extensions().get::<UserInformation>() {
         Some(UserInformation::Authenticated(details)) => match (&details.issuer, &details.email) {
             (Some(issuer), Some(email)) => Some(Identity {

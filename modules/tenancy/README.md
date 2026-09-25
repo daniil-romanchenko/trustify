@@ -19,7 +19,7 @@ Every change is recorded in the `audit_event` table.
 
 > [!NOTE]
 > Role bindings are stored, but not yet enforced. Access to SBOMs is still granted by the global
-> permissions only.
+> permissions only. API key scopes are enforced.
 
 ## Signing in
 
@@ -89,3 +89,36 @@ http DELETE localhost:8080/api/v3/group/sbom/ext:acme.payments/binding/user/alic
 
 Replacing bindings accepts an `If-Match` header, using the `ETag` returned by the previous `GET` or
 `PUT`.
+
+## API keys
+
+API keys allow machines, like CI pipelines, to upload SBOMs. A key belongs to one or more SBOM
+groups, and can only upload into those groups and their descendants. Uploads without a `group`
+parameter are assigned to the key's default group, and the key's labels are applied to every
+upload. Requests using an API key are rejected for every other endpoint.
+
+API keys are disabled unless a pepper is configured, which is used to derive the stored hashes:
+
+```bash
+TRUSTD_API_KEY_PEPPER="$(openssl rand -hex 32)" trustd api …
+```
+
+The token is only returned when a key is created or rotated:
+
+```bash
+http POST localhost:8080/api/v3/api-key name="checkout CI" groups:='["ext:acme.payments.checkout"]' \
+  expiresAt=2027-01-01T00:00:00Z externalId=checkout.ci labels:='{"pipeline": "gitlab"}'
+
+# upload using the key
+curl -X POST localhost:8080/api/v3/sbom -H "Authorization: Bearer tfy_…" --data-binary @sbom.json
+
+# rotate: the old key stays valid for the grace period (at most 7 days), the external ID moves to the new key
+http POST localhost:8080/api/v3/api-key/ext:checkout.ci/rotate gracePeriod=24h expiresAt=2027-06-01T00:00:00Z
+
+# revoke
+http DELETE localhost:8080/api/v3/api-key/ext:checkout.ci
+```
+
+Tokens have the form `tfy_<key id>_<secret>_<checksum>`. The key ID is public, and shown in logs and
+the API. Revocations take effect immediately on the same instance, and within 60 seconds on others.
+The maximum lifetime of a key is configured using `TRUSTD_API_KEY_MAX_TTL` (default: `365d`).

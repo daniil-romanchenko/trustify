@@ -61,6 +61,7 @@ impl From<ValidatedAccessToken> for UserDetails {
             permissions: token.permissions,
             issuer: Some(token.access_token.iss.to_string()),
             email,
+            api_key: None,
         }
     }
 }

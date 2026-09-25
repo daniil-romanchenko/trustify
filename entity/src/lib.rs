@@ -1,6 +1,8 @@
 pub mod advisory;
 pub mod advisory_vulnerability;
 pub mod advisory_vulnerability_score;
+pub mod api_key;
+pub mod api_key_scope;
 pub mod audit_event;
 pub mod base_purl;
 pub mod cpe;

@@ -1,6 +1,6 @@
 //! Structures to work with users and identities.
 
-use crate::authenticator::error::AuthorizationError;
+use crate::authenticator::{error::AuthorizationError, token::ApiKeyInformation};
 
 /// Details of an authenticated user.
 ///
@@ -36,6 +36,8 @@ pub struct UserDetails {
     pub issuer: Option<String>,
     /// The e-mail address of the user, only present if the token marked it as verified.
     pub email: Option<String>,
+    /// Present if the request was authenticated using an API key.
+    pub api_key: Option<Box<ApiKeyInformation>>,
 }
 
 impl UserDetails {

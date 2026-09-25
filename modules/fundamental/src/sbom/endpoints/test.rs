@@ -25,11 +25,13 @@ use std::{
 };
 use test_context::test_context;
 use test_log::test;
+use trustify_auth::authenticator::{token::ApiKeyInformation, user::UserDetails};
 use trustify_common::{id::Id, model::PaginatedResults};
 use trustify_module_ingestor::{model::IngestResult, service::Format};
 use trustify_module_storage::service::{StorageBackend, StorageKey};
 use trustify_test_context::{
-    IngestionResult, TrustifyContext, call::CallService, document_bytes, subset::ContainsSubset,
+    IngestionResult, TrustifyContext, auth::TestAuthentication, call::CallService, document_bytes,
+    subset::ContainsSubset,
 };
 use urlencoding::encode;
 use uuid::Uuid;
@@ -1099,6 +1101,78 @@ async fn upload_with_groups(
         let sbom_id = result.id.strip_prefix("urn:uuid:").unwrap();
         let assignments = read_assignments(&app, sbom_id).await?;
         assert_eq!(assignments.group_ids.len(), expected_assignments);
+    }
+
+    Ok(())
+}
+
+/// Uploads using an API key are limited to the key's groups, and get its labels.
+#[test_context(TrustifyContext)]
+#[rstest]
+#[case::default_group(None, StatusCode::CREATED, Some(&["Team", "Project"][..]))]
+#[case::in_scope(Some(&["Team"][..]), StatusCode::CREATED, Some(&["Team"][..]))]
+#[case::out_of_scope(Some(&["Other"][..]), StatusCode::FORBIDDEN, None)]
+#[test_log::test(actix_web::test)]
+async fn upload_with_api_key(
+    ctx: &TrustifyContext,
+    #[case] group: Option<&[&str]>,
+    #[case] expected_status: StatusCode,
+    #[case] expected_group: Option<&[&str]>,
+) -> anyhow::Result<()> {
+    let app = caller(ctx).await?;
+
+    let mut team = Group::new("Team");
+    team.children = vec![Group::new("Project")];
+    let ids = create_groups(&app, vec![team, Group::new("Other")]).await?;
+
+    let key = UserDetails {
+        id: "api-key:test".into(),
+        permissions: vec!["create.sbom".into()],
+        api_key: Some(Box::new(ApiKeyInformation {
+            id: Uuid::now_v7().to_string(),
+            key_id: "test".into(),
+            // already expanded to the descendants
+            groups: vec![
+                locate_id(&ids, ["Team"]),
+                locate_id(&ids, ["Team", "Project"]),
+            ],
+            default_group: Some(locate_id(&ids, ["Team", "Project"])),
+            labels: [("pipeline".to_string(), "gitlab".to_string())].into(),
+        })),
+        ..Default::default()
+    };
+
+    let uri = match group {
+        Some(group) => format!(
+            "/api/v3/sbom?group={}&labels.pipeline=forged",
+            locate_id(&ids, group)
+        ),
+        None => "/api/v3/sbom?labels.pipeline=forged".to_string(),
+    };
+    let request = TestRequest::post()
+        .uri(&uri)
+        .set_payload(document_bytes("quarkus-bom-2.13.8.Final-redhat-00004.json").await?)
+        .to_request()
+        .test_auth_details(key);
+
+    let response = app.call_service(request).await;
+    assert_eq!(response.status(), expected_status);
+
+    if let Some(expected_group) = expected_group {
+        let result: IngestResult = actix_web::test::read_body_json(response).await;
+        let sbom_id = result.id.strip_prefix("urn:uuid:").unwrap_or_default();
+
+        let assignments = read_assignments(&app, sbom_id).await?;
+        assert_eq!(assignments.group_ids, vec![locate_id(&ids, expected_group)]);
+
+        let sbom: Value = app
+            .call_and_read_body_json(
+                TestRequest::get()
+                    .uri(&format!("/api/v3/sbom/{}", result.id))
+                    .to_request(),
+            )
+            .await;
+        assert_eq!(sbom["labels"]["pipeline"], "gitlab");
     }
 
     Ok(())
