@@ -4,6 +4,7 @@ mod test;
 use crate::{
     Error,
     audit::Actor,
+    principal::PrincipalResolver,
     user::{
         model::{Access, ChangeEmailRequest, User, UserRequest},
         service::UserService,
@@ -106,9 +107,11 @@ async fn read(
     )
 )]
 #[put("/v3/user/{email}")]
+#[allow(clippy::too_many_arguments)]
 /// Create or update a user
 async fn upsert(
     service: web::Data<UserService>,
+    resolver: web::Data<PrincipalResolver>,
     db: web::Data<db::ReadWrite>,
     email: web::Path<String>,
     web::Header(if_match): web::Header<IfMatch>,
@@ -127,6 +130,7 @@ async fn upsert(
         )
         .await?;
     tx.commit().await?;
+    resolver.invalidate();
 
     let mut response = if created {
         HttpResponse::Created()
@@ -158,6 +162,7 @@ async fn upsert(
 /// Delete a user, including its team memberships and role bindings
 async fn delete(
     service: web::Data<UserService>,
+    resolver: web::Data<PrincipalResolver>,
     db: web::Data<db::ReadWrite>,
     email: web::Path<String>,
     web::Header(if_match): web::Header<IfMatch>,
@@ -174,6 +179,7 @@ async fn delete(
         )
         .await?;
     tx.commit().await?;
+    resolver.invalidate();
 
     Ok(HttpResponse::NoContent().finish())
 }
@@ -205,6 +211,7 @@ async fn delete(
 async fn change_email(
     req: HttpRequest,
     service: web::Data<UserService>,
+    resolver: web::Data<PrincipalResolver>,
     db: web::Data<db::ReadWrite>,
     email: web::Path<String>,
     web::Header(if_match): web::Header<IfMatch>,
@@ -223,6 +230,7 @@ async fn change_email(
         )
         .await?;
     tx.commit().await?;
+    resolver.invalidate();
 
     let location = req
         .path()

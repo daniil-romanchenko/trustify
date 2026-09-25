@@ -11,6 +11,7 @@ pub trait TestAuthentication: Sized {
         self.test_auth_details(UserDetails {
             id: id.into(),
             permissions: vec![],
+            ..Default::default()
         })
     }
 }
