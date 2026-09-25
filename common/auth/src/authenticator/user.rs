@@ -27,10 +27,15 @@ use crate::authenticator::error::{AuthenticationError, AuthorizationError};
 ///
 /// Extraction, and the request, will fail with `401` when the user is not authenticated,
 /// and `403` when the user is [`UserInformation::Anonymous`].
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct UserDetails {
+    /// The subject of the token (`sub` claim).
     pub id: String,
     pub permissions: Vec<String>,
+    /// The issuer of the token (`iss` claim).
+    pub issuer: Option<String>,
+    /// The e-mail address of the user, only present if the token marked it as verified.
+    pub email: Option<String>,
 }
 
 impl UserDetails {

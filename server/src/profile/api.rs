@@ -2,7 +2,7 @@
 use crate::embedded_oidc;
 
 use crate::{endpoints, profile::spawn_db_check, sample_data};
-use actix_web::web;
+use actix_web::{middleware::from_fn, web};
 use anyhow::Context;
 use bytesize::ByteSize;
 use futures::FutureExt;
@@ -93,6 +93,7 @@ use trustify_module_ingestor::{
 };
 use trustify_module_notification::config::NotificationConfig;
 use trustify_module_storage::{config::StorageConfig, service::dispatch::DispatchBackend};
+use trustify_module_tenancy::principal::{PrincipalResolver, resolve_principal};
 use trustify_module_ui::{UI, endpoints::UiResources};
 use utoipa::openapi::{Info, License};
 
@@ -858,9 +859,19 @@ pub(crate) fn configure(svc: &mut utoipa_actix_web::service_config::ServiceConfi
         trustify_module_notification::endpoints::configure(svc, broadcaster, auth.clone());
     });
 
+    let principal_resolver = Arc::new(PrincipalResolver::new(db_rw.clone(), true));
+    let principal_middleware = principal_resolver.clone();
+
     svc.service(
         utoipa_actix_web::scope("/api")
-            .map(|scope| scope.wrap(new_auth(auth)))
+            .map(|scope| {
+                // the principal must be resolved after authentication, which means wrapping it first
+                scope
+                    .wrap(from_fn(move |req, next| {
+                        resolve_principal(principal_middleware.clone(), req, next)
+                    }))
+                    .wrap(new_auth(auth))
+            })
             .configure(|svc| {
                 trustify_module_importer::endpoints::configure(
                     svc,
@@ -901,6 +912,7 @@ pub(crate) fn configure(svc: &mut utoipa_actix_web::service_config::ServiceConfi
                     db_rw.clone(),
                     db_ro.clone(),
                     cache,
+                    principal_resolver,
                 );
                 trustify_module_user::endpoints::configure(svc);
                 trustify_module_ui::endpoints::configure(svc, ui)

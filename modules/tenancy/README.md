@@ -21,6 +21,25 @@ Every change is recorded in the `audit_event` table.
 > Role bindings are stored, but not yet enforced. Access to SBOMs is still granted by the global
 > permissions only.
 
+## Signing in
+
+When an access token carries a verified e-mail address (`email` claim, with `email_verified` being
+`true`), the request is linked to a user:
+
+1. A user already linked to the token's issuer and subject.
+2. Otherwise, a user with that e-mail address, which is not linked yet. This is how users provisioned
+   upfront become active.
+3. Otherwise, a new, active user is created, without any role bindings.
+
+Requests of disabled users are rejected with `401`. Linking is cached for 30 seconds per instance,
+changes to users made through this API take effect immediately on the same instance.
+
+The calling user, its global permissions, and its roles can be retrieved using:
+
+```bash
+http GET localhost:8080/api/v3/me
+```
+
 ## Groups
 
 ```bash
