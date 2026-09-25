@@ -10,6 +10,7 @@ pub use default::*;
 pub mod actix;
 pub mod config;
 pub mod error;
+pub mod token;
 pub mod user;
 
 use crate::{

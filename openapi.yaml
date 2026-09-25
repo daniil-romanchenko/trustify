@@ -1012,6 +1012,231 @@ paths:
           description: The user did not provide valid authentication credentials
         '403':
           description: The user lacks the required permission
+  /api/v3/api-key:
+    get:
+      tags:
+      - tenancy
+      summary: List API keys
+      operationId: listApiKeys
+      parameters:
+      - name: group
+        in: query
+        description: Only keys scoped to this group (ID, or `ext:<external id>`).
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: state
+        in: query
+        description: Only keys in this state.
+        required: false
+        schema:
+          oneOf:
+          - type: 'null'
+          - type: string
+            enum:
+            - active
+            - revoked
+      - name: offset
+        in: query
+        description: |-
+          The first item to return, skipping all that come before it.
+
+          NOTE: The order of items is defined by the API being called.
+        required: false
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+      - name: limit
+        in: query
+        description: |-
+          The maximum number of entries to return.
+
+          Zero means: return no items (the total count is still computed if requested).
+        required: false
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+      - name: total
+        in: query
+        description: Whether to compute and return the total count of matching items.
+        required: false
+        schema:
+          type: boolean
+      responses:
+        '200':
+          description: Matching API keys, without their tokens
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedResults_ApiKey'
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+    post:
+      tags:
+      - tenancy
+      summary: Create an API key
+      operationId: createApiKey
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApiKeyRequest'
+        required: true
+      responses:
+        '201':
+          description: The API key was created. The response contains the token, which cannot be retrieved later.
+          headers:
+            location:
+              schema:
+                type: string
+              description: The relative URL to the created resource
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssuedApiKey'
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+        '409':
+          description: The external ID is already in use
+        '503':
+          description: API keys are disabled
+  /api/v3/api-key/{key}:
+    get:
+      tags:
+      - tenancy
+      summary: Get an API key
+      operationId: getApiKey
+      parameters:
+      - name: key
+        in: path
+        description: The ID of the API key, or `ext:<external id>`
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: The API key, without its token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKey'
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+        '404':
+          description: The API key was not found
+    delete:
+      tags:
+      - tenancy
+      summary: Revoke an API key
+      operationId: revokeApiKey
+      parameters:
+      - name: key
+        in: path
+        description: The ID of the API key, or `ext:<external id>`
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: The API key was revoked, or did not exist
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+    patch:
+      tags:
+      - tenancy
+      summary: Change the name or labels of an API key
+      operationId: updateApiKey
+      parameters:
+      - name: key
+        in: path
+        description: The ID of the API key, or `ext:<external id>`
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApiKeyPatch'
+        required: true
+      responses:
+        '200':
+          description: The API key was updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKey'
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+        '404':
+          description: The API key was not found
+  /api/v3/api-key/{key}/rotate:
+    post:
+      tags:
+      - tenancy
+      summary: Rotate an API key
+      operationId: rotateApiKey
+      parameters:
+      - name: key
+        in: path
+        description: The ID of the API key, or `ext:<external id>`
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RotateRequest'
+        required: true
+      responses:
+        '201':
+          description: A new API key was created, replacing the old one after the grace period. The response contains the token, which cannot be retrieved later.
+          headers:
+            location:
+              schema:
+                type: string
+              description: The relative URL to the created resource
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssuedApiKey'
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+        '404':
+          description: The API key was not found
+        '409':
+          description: The API key is not active
+        '503':
+          description: API keys are disabled
   /api/v3/dataset:
     post:
       tags:
@@ -5775,6 +6000,134 @@ components:
         status:
           $ref: '#/components/schemas/ExploitIntelligenceJobStatus'
           description: Current lifecycle status of the job.
+    ApiKey:
+      type: object
+      description: An API key, without its secret.
+      required:
+      - id
+      - keyId
+      - name
+      - permissions
+      - groups
+      - state
+      - expiresAt
+      - createdAt
+      - createdBy
+      properties:
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+        defaultGroup:
+          type:
+          - string
+          - 'null'
+          description: The ID of the group uploads are assigned to, when they don't request any.
+        expiresAt:
+          type: string
+          format: date-time
+        externalId:
+          type:
+          - string
+          - 'null'
+          description: |-
+            An optional ID, assigned by an external system.
+
+            The key can also be addressed using the key `ext:<external_id>`.
+        groups:
+          type: array
+          items:
+            type: string
+          description: The IDs of the SBOM groups the key may upload into, including their descendants.
+        id:
+          type: string
+          description: The ID of the key, assigned by the system.
+        keyId:
+          type: string
+          description: The public part of the token, e.g. for correlating with logs.
+        labels:
+          $ref: '#/components/schemas/Labels'
+          description: Labels applied to every uploaded document.
+        lastUsedAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+          description: When the key was last used, with a granularity of a few minutes.
+        name:
+          type: string
+        permissions:
+          type: array
+          items:
+            type: string
+          description: The permissions granted by the key.
+        rotatedFrom:
+          type:
+          - string
+          - 'null'
+          description: The ID of the key this one replaced.
+        state:
+          $ref: '#/components/schemas/ApiKeyState'
+    ApiKeyPatch:
+      type: object
+      description: Changes to an API key. Scopes and expiration can only be changed by rotating the key.
+      properties:
+        labels:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/Labels'
+        name:
+          type:
+          - string
+          - 'null'
+    ApiKeyRequest:
+      type: object
+      description: Request to create a new API key.
+      required:
+      - name
+      - groups
+      - expiresAt
+      properties:
+        defaultGroup:
+          type:
+          - string
+          - 'null'
+          description: |-
+            The group to assign uploads to, when they don't request any. Required when there is more
+            than one group. Must be one of the groups, or one of their descendants.
+        expiresAt:
+          type: string
+          format: date-time
+        externalId:
+          type:
+          - string
+          - 'null'
+          description: An optional ID, assigned by an external system, unique across all API keys.
+        groups:
+          type: array
+          items:
+            type: string
+          description: The SBOM groups the key may upload into, by ID or `ext:<external id>`.
+        labels:
+          $ref: '#/components/schemas/Labels'
+          description: Labels applied to every uploaded document, overriding labels of the upload request.
+        name:
+          type: string
+        permissions:
+          type:
+          - array
+          - 'null'
+          items:
+            type: string
+          description: |-
+            The permissions of the key. Currently, only `create.sbom` is supported, which is the
+            default.
+    ApiKeyState:
+      type: string
+      enum:
+      - active
+      - revoked
     AuthConfig:
       type: object
       description: |-
@@ -6916,6 +7269,17 @@ components:
           items:
             type: string
           description: Warnings that occurred during the import process
+    IssuedApiKey:
+      allOf:
+      - $ref: '#/components/schemas/ApiKey'
+      - type: object
+        required:
+        - token
+        properties:
+          token:
+            type: string
+            description: The token to authenticate with. It is only returned once, and cannot be retrieved later.
+      description: A newly issued API key, including its token.
     KevImporter:
       allOf:
       - $ref: '#/components/schemas/CommonImporter'
@@ -7232,6 +7596,88 @@ components:
                   items:
                     $ref: '#/components/schemas/AdvisoryVulnerabilityHead'
                   description: Vulnerabilities addressed within this advisory.
+        total:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 0
+    PaginatedResults_ApiKey:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            description: An API key, without its secret.
+            required:
+            - id
+            - keyId
+            - name
+            - permissions
+            - groups
+            - state
+            - expiresAt
+            - createdAt
+            - createdBy
+            properties:
+              createdAt:
+                type: string
+                format: date-time
+              createdBy:
+                type: string
+              defaultGroup:
+                type:
+                - string
+                - 'null'
+                description: The ID of the group uploads are assigned to, when they don't request any.
+              expiresAt:
+                type: string
+                format: date-time
+              externalId:
+                type:
+                - string
+                - 'null'
+                description: |-
+                  An optional ID, assigned by an external system.
+
+                  The key can also be addressed using the key `ext:<external_id>`.
+              groups:
+                type: array
+                items:
+                  type: string
+                description: The IDs of the SBOM groups the key may upload into, including their descendants.
+              id:
+                type: string
+                description: The ID of the key, assigned by the system.
+              keyId:
+                type: string
+                description: The public part of the token, e.g. for correlating with logs.
+              labels:
+                $ref: '#/components/schemas/Labels'
+                description: Labels applied to every uploaded document.
+              lastUsedAt:
+                type:
+                - string
+                - 'null'
+                format: date-time
+                description: When the key was last used, with a granularity of a few minutes.
+              name:
+                type: string
+              permissions:
+                type: array
+                items:
+                  type: string
+                description: The permissions granted by the key.
+              rotatedFrom:
+                type:
+                - string
+                - 'null'
+                description: The ID of the key this one replaced.
+              state:
+                $ref: '#/components/schemas/ApiKeyState'
         total:
           type:
           - integer
@@ -8761,6 +9207,19 @@ components:
       properties:
         role:
           $ref: '#/components/schemas/Role'
+    RotateRequest:
+      type: object
+      description: Request to rotate an API key.
+      required:
+      - expiresAt
+      properties:
+        expiresAt:
+          type: string
+          format: date-time
+          description: When the new key expires.
+        gracePeriod:
+          type: string
+          description: How long the old key stays valid (humantime, e.g. "24h"), at most 7 days.
     SbomAdvisory:
       allOf:
       - $ref: '#/components/schemas/AdvisoryHead'

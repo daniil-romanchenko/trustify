@@ -29,10 +29,13 @@ use config::Config;
 use futures_util::TryStreamExt;
 use sea_orm::TransactionTrait;
 use serde_qs::actix::QsQuery;
-use std::str::FromStr;
+use std::{collections::HashSet, str::FromStr};
 use trustify_auth::{
     CreateSbom, DeleteSbom, Permission, ReadAdvisory, ReadSbom, all,
-    authenticator::user::UserInformation,
+    authenticator::{
+        error::AuthorizationError,
+        user::{UserDetails, UserInformation},
+    },
     authorizer::{Authorizer, Require},
 };
 use trustify_common::{
@@ -700,6 +703,50 @@ const fn default_format() -> Format {
     Format::SBOM
 }
 
+/// Apply the scope of the API key, if the upload was authenticated using one.
+///
+/// Uploads without groups are assigned to the key's default group. Uploads into groups outside
+/// the key's scope are rejected. The key's labels override labels of the request.
+fn apply_api_key(
+    user: &UserInformation,
+    groups: &mut Vec<String>,
+    labels: &mut Labels,
+) -> Result<(), Error> {
+    let UserInformation::Authenticated(UserDetails {
+        api_key: Some(key), ..
+    }) = user
+    else {
+        return Ok(());
+    };
+
+    if groups.is_empty() {
+        groups.extend(key.default_group.clone());
+    }
+
+    let allowed: HashSet<Uuid> = key
+        .groups
+        .iter()
+        .filter_map(|group| Uuid::parse_str(group).ok())
+        .collect();
+
+    let in_scope = !groups.is_empty()
+        && groups
+            .iter()
+            .all(|group| Uuid::parse_str(group).is_ok_and(|group| allowed.contains(&group)));
+
+    if !in_scope {
+        log::info!(
+            "API key '{}' is not allowed to upload into groups: {groups:?}",
+            key.key_id
+        );
+        return Err(AuthorizationError::Failed.into());
+    }
+
+    labels.0.extend(key.labels.clone());
+
+    Ok(())
+}
+
 #[utoipa::path(
     tag = "sbom",
     operation_id = "uploadSbom",
@@ -722,15 +769,18 @@ pub async fn upload(
     config: web::Data<Config>,
     db: web::Data<db::ReadWrite>,
     QsQuery(UploadQuery {
-        labels,
+        mut labels,
         format,
         cache,
-        group,
+        mut group,
     }): QsQuery<UploadQuery>,
     content_type: Option<web::Header<header::ContentType>>,
     bytes: web::Bytes,
+    user: UserInformation,
     _: Require<CreateSbom>,
 ) -> Result<impl Responder, Error> {
+    apply_api_key(&user, &mut group, &mut labels)?;
+
     let format = format
         .ensure_allowed_for(default_format())
         .map_err(Error::Ingestor)?;

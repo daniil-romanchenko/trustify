@@ -40,6 +40,7 @@ pub async fn create_openapi() -> anyhow::Result<utoipa::openapi::OpenApi> {
                     ei_service,
                     graph: Graph::new(),
                     validators: Vec::new(),
+                    tenancy: None,
                 },
             );
         })
