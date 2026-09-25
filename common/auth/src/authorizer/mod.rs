@@ -1,5 +1,7 @@
 mod require;
+mod scope;
 pub use require::*;
+pub use scope::*;
 
 use crate::{
     Permission,

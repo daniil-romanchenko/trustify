@@ -4,6 +4,7 @@ mod test;
 use crate::{
     Error,
     audit::Actor,
+    authz::ManageAccess,
     binding::{
         model::{Binding, BindingRequest, PrincipalRef, RoleRequest},
         service::BindingService,
@@ -16,7 +17,7 @@ use actix_web::{
     put, web,
 };
 use sea_orm::TransactionTrait;
-use trustify_auth::{ManageTenancy, authenticator::user::UserInformation, authorizer::Require};
+use trustify_auth::authenticator::user::UserInformation;
 use trustify_common::{db, endpoints::extract_revision, model::Revisioned};
 
 pub fn configure(config: &mut utoipa_actix_web::service_config::ServiceConfig) {
@@ -53,9 +54,10 @@ async fn list(
     service: web::Data<BindingService>,
     db: web::Data<db::ReadOnly>,
     group: web::Path<String>,
-    _: Require<ManageTenancy>,
+    manage: ManageAccess,
 ) -> Result<impl Responder, Error> {
     let tx = db.begin().await?;
+    manage.require_group(&group, &tx).await?;
     Ok(match service.list(&group, &tx).await? {
         Some(Revisioned { value, revision }) => {
             HttpResponse::Ok().append_header(etag(revision)).json(value)
@@ -94,9 +96,10 @@ async fn replace(
     web::Header(if_match): web::Header<IfMatch>,
     user: UserInformation,
     web::Json(request): web::Json<Vec<BindingRequest>>,
-    _: Require<ManageTenancy>,
+    manage: ManageAccess,
 ) -> Result<impl Responder, Error> {
     let tx = db.begin().await?;
+    manage.require_group(&group, &tx).await?;
     let Revisioned { revision, .. } = service
         .replace(
             &group,
@@ -121,11 +124,19 @@ async fn set(
     group: &str,
     principal: PrincipalRef,
     role: RoleRequest,
-    user: &UserInformation,
+    manage: &ManageAccess,
 ) -> Result<HttpResponse, Error> {
     let tx = db.begin().await?;
+    manage.require_group(group, &tx).await?;
     service
-        .set(group, &principal, role.role, users, &Actor::from(user), &tx)
+        .set(
+            group,
+            &principal,
+            role.role,
+            users,
+            &Actor::from(manage.user()),
+            &tx,
+        )
         .await?;
     tx.commit().await?;
 
@@ -137,11 +148,12 @@ async fn remove(
     db: &db::ReadWrite,
     group: &str,
     principal: PrincipalRef,
-    user: &UserInformation,
+    manage: &ManageAccess,
 ) -> Result<HttpResponse, Error> {
     let tx = db.begin().await?;
+    manage.require_group(group, &tx).await?;
     service
-        .remove(group, &principal, &Actor::from(user), &tx)
+        .remove(group, &principal, &Actor::from(manage.user()), &tx)
         .await?;
     tx.commit().await?;
 
@@ -173,9 +185,8 @@ async fn set_user(
     users: web::Data<UserService>,
     db: web::Data<db::ReadWrite>,
     path: web::Path<(String, String)>,
-    user: UserInformation,
     web::Json(role): web::Json<RoleRequest>,
-    _: Require<ManageTenancy>,
+    manage: ManageAccess,
 ) -> Result<impl Responder, Error> {
     let (group, email) = path.into_inner();
     set(
@@ -185,7 +196,7 @@ async fn set_user(
         &group,
         PrincipalRef::User(email),
         role,
-        &user,
+        &manage,
     )
     .await
 }
@@ -210,11 +221,10 @@ async fn remove_user(
     service: web::Data<BindingService>,
     db: web::Data<db::ReadWrite>,
     path: web::Path<(String, String)>,
-    user: UserInformation,
-    _: Require<ManageTenancy>,
+    manage: ManageAccess,
 ) -> Result<impl Responder, Error> {
     let (group, email) = path.into_inner();
-    remove(&service, &db, &group, PrincipalRef::User(email), &user).await
+    remove(&service, &db, &group, PrincipalRef::User(email), &manage).await
 }
 
 #[utoipa::path(
@@ -240,9 +250,8 @@ async fn set_team(
     users: web::Data<UserService>,
     db: web::Data<db::ReadWrite>,
     path: web::Path<(String, String)>,
-    user: UserInformation,
     web::Json(role): web::Json<RoleRequest>,
-    _: Require<ManageTenancy>,
+    manage: ManageAccess,
 ) -> Result<impl Responder, Error> {
     let (group, team) = path.into_inner();
     set(
@@ -252,7 +261,7 @@ async fn set_team(
         &group,
         PrincipalRef::Team(team),
         role,
-        &user,
+        &manage,
     )
     .await
 }
@@ -277,9 +286,8 @@ async fn remove_team(
     service: web::Data<BindingService>,
     db: web::Data<db::ReadWrite>,
     path: web::Path<(String, String)>,
-    user: UserInformation,
-    _: Require<ManageTenancy>,
+    manage: ManageAccess,
 ) -> Result<impl Responder, Error> {
     let (group, team) = path.into_inner();
-    remove(&service, &db, &group, PrincipalRef::Team(team), &user).await
+    remove(&service, &db, &group, PrincipalRef::Team(team), &manage).await
 }

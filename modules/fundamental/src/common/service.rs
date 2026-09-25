@@ -4,6 +4,7 @@ use spdx_expression;
 use std::collections::BTreeMap;
 use tracing::instrument;
 use trustify_module_storage::service::{StorageBackend, StorageKey, dispatch::DispatchBackend};
+use uuid::Uuid;
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum DocumentType {
@@ -19,8 +20,19 @@ pub async fn fetch_labels<C: ConnectionTrait>(
     r#type: DocumentType,
     filter_text: String,
     limit: u64,
+    visible: Option<Vec<Uuid>>,
     connection: &C,
 ) -> Result<Vec<serde_json::Value>, Error> {
+    // only SBOMs are scoped to groups
+    let visible = match r#type {
+        DocumentType::Sbom => visible,
+        DocumentType::Advisory => None,
+    };
+    let visible_clause = if visible.is_some() {
+        "AND sbom_id IN (SELECT sbom_id FROM sbom_group_assignment WHERE group_id = ANY($2))"
+    } else {
+        ""
+    };
     // SAFETY: `limit` is parsed as a numeric query parameter, so interpolation cannot add SQL syntax.
     let limit_clause = if limit == 0 {
         String::new()
@@ -42,6 +54,7 @@ WHERE
         WHEN kv.value IS NULL THEN kv.key
         ELSE kv.key || '=' || kv.value
     END ILIKE $1 ESCAPE '\'
+    {visible_clause}
 GROUP BY kv.key, kv.value
 ORDER BY
     kv.key, kv.value
@@ -53,11 +66,11 @@ ORDER BY
         }
     );
 
-    let statement = Statement::from_sql_and_values(
-        DbBackend::Postgres,
-        sql,
-        [format!("%{}%", escape(filter_text)).into()],
-    );
+    let mut values = vec![format!("%{}%", escape(filter_text)).into()];
+    if let Some(visible) = visible {
+        values.push(visible.into());
+    }
+    let statement = Statement::from_sql_and_values(DbBackend::Postgres, sql, values);
 
     let selector = serde_json::Value::find_by_statement(statement);
     let labels: Vec<serde_json::Value> = selector.all(connection).await?;

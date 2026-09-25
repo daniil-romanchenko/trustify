@@ -9,6 +9,7 @@ pub use walk::*;
 
 mod collector;
 pub mod render;
+pub(crate) mod scope;
 #[cfg(test)]
 mod test;
 
@@ -846,14 +847,34 @@ impl AnalysisService {
         paginated: impl Pagination,
         connection: &C,
     ) -> Result<PaginatedResults<Node>, Error> {
+        self.retrieve_scoped(query, options, paginated, None, connection)
+            .await
+    }
+
+    /// locate components, limited to SBOMs assigned to the visible groups
+    ///
+    /// Components of other SBOMs are not returned, and the ancestors and descendants of
+    /// components are pruned where they cross into other SBOMs. `None` means no restriction.
+    #[instrument(skip(self, connection), err)]
+    pub async fn retrieve_scoped<C: ConnectionTrait>(
+        &self,
+        query: impl Into<GraphQuery<'_>> + Debug,
+        options: impl Into<QueryOptions> + Debug,
+        paginated: impl Pagination,
+        visible_groups: Option<Vec<Uuid>>,
+        connection: &C,
+    ) -> Result<PaginatedResults<Node>, Error> {
         let query = query.into();
         let options = options.into();
 
         let graphs = self.load_graphs_query(connection, query).await?;
+        let graphs = scope::restrict_graphs(graphs, visible_groups.as_deref(), connection).await?;
 
         let components = self
             .run_graph_query(query, options, &graphs, connection)
             .await?;
+        let components =
+            scope::prune_nodes(components, visible_groups.as_deref(), connection).await?;
 
         Ok(paginated.paginate_array(&components))
     }
@@ -874,13 +895,29 @@ impl AnalysisService {
         paginated: impl Pagination,
         connection: &C,
     ) -> Result<PaginatedResults<Node>, Error> {
+        self.retrieve_latest_scoped(query, options, paginated, None, connection)
+            .await
+    }
+
+    /// Like [`Self::retrieve_latest`], limited to SBOMs assigned to the visible groups.
+    ///
+    /// The "latest" SBOM is determined among the visible SBOMs only.
+    #[instrument(skip(self, connection), err)]
+    pub async fn retrieve_latest_scoped<C: ConnectionTrait + Send + Sync>(
+        &self,
+        query: impl Into<GraphQuery<'_>> + Debug,
+        options: impl Into<QueryOptions> + Debug,
+        paginated: impl Pagination,
+        visible_groups: Option<Vec<Uuid>>,
+        connection: &C,
+    ) -> Result<PaginatedResults<Node>, Error> {
         let query = query.into();
         let options = options.into();
 
-        // load only latest graphs
+        // load only latest graphs, among the visible ones
         let graphs = self
             .inner
-            .load_latest_graphs_query(connection, query)
+            .load_latest_graphs_query(connection, query, visible_groups.as_deref())
             .await?;
 
         log::debug!("graph sbom count: {:?}", graphs.len());
@@ -888,6 +925,8 @@ impl AnalysisService {
         let components = self
             .run_graph_query(query, options, &graphs, connection)
             .await?;
+        let components =
+            scope::prune_nodes(components, visible_groups.as_deref(), connection).await?;
 
         Ok(paginated.paginate_array(&components))
     }

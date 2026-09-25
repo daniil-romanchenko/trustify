@@ -1,6 +1,9 @@
 use crate::{
     Error,
-    common::service::{DocumentType, fetch_labels},
+    common::{
+        access::{require_sbom, visible_groups},
+        service::{DocumentType, fetch_labels},
+    },
     sbom::service::SbomService,
 };
 use actix_web::{HttpResponse, Responder, get, patch, put, web};
@@ -9,7 +12,7 @@ use serde::Deserialize;
 use trustify_auth::{
     Permission, UpdateSbom,
     authenticator::user::UserInformation,
-    authorizer::{Authorizer, Require},
+    authorizer::{AccessScope, Authorizer, Require},
 };
 use trustify_common::{db, id::Id};
 use trustify_entity::labels::{Labels, Update};
@@ -47,11 +50,19 @@ pub async fn all(
     web::Query(query): web::Query<LabelQuery>,
     authorizer: web::Data<Authorizer>,
     user: UserInformation,
+    scope: AccessScope,
 ) -> Result<impl Responder, Error> {
     authorizer.require(&user, Permission::ReadSbom)?;
 
     let tx = db.begin().await?;
-    let result = fetch_labels(DocumentType::Sbom, query.filter_text, query.limit, &tx).await?;
+    let result = fetch_labels(
+        DocumentType::Sbom,
+        query.filter_text,
+        query.limit,
+        visible_groups(&scope),
+        &tx,
+    )
+    .await?;
 
     Ok(HttpResponse::Ok().json(result))
 }
@@ -75,9 +86,11 @@ pub async fn update(
     db: web::Data<db::ReadWrite>,
     id: web::Path<Id>,
     web::Json(update): web::Json<Update>,
+    scope: AccessScope,
     _: Require<UpdateSbom>,
 ) -> Result<impl Responder, Error> {
     let tx = db.begin().await?;
+    require_sbom(&scope, Permission::UpdateSbom, &id, &tx).await?;
     let result = sbom
         .update_labels(id.into_inner(), |labels| update.apply_to(labels), &tx)
         .await?;
@@ -108,8 +121,10 @@ pub async fn set(
     db: web::Data<db::ReadWrite>,
     id: web::Path<Id>,
     web::Json(labels): web::Json<Labels>,
+    scope: AccessScope,
     _: Require<UpdateSbom>,
 ) -> Result<impl Responder, Error> {
+    require_sbom(&scope, Permission::UpdateSbom, &id, db.as_ref()).await?;
     Ok(
         match sbom
             .set_labels(id.into_inner(), labels, db.as_ref())
