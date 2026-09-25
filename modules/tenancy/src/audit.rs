@@ -1,7 +1,10 @@
 //! Recording changes to the tenancy configuration.
 
-use sea_orm::{ActiveValue::Set, ConnectionTrait, DbErr, EntityTrait, NotSet};
+use sea_orm::{
+    ActiveValue::Set, ColumnTrait, ConnectionTrait, DbErr, EntityTrait, NotSet, QueryFilter,
+};
 use serde_json::Value;
+use std::time::Duration;
 use trustify_auth::authenticator::user::UserInformation;
 use trustify_entity::audit_event;
 
@@ -79,4 +82,17 @@ pub async fn record(
     .await?;
 
     Ok(())
+}
+
+/// Delete audit events older than the retention period.
+///
+/// Returns the number of deleted events.
+pub async fn prune(retention: Duration, db: &impl ConnectionTrait) -> Result<u64, DbErr> {
+    let cutoff = time::OffsetDateTime::now_utc() - retention;
+    let result = audit_event::Entity::delete_many()
+        .filter(audit_event::Column::At.lt(cutoff))
+        .exec(db)
+        .await?;
+
+    Ok(result.rows_affected)
 }

@@ -118,6 +118,18 @@ http POST localhost:8080/api/v3/api-key/ext:checkout.ci/rotate gracePeriod=24h e
 http DELETE localhost:8080/api/v3/api-key/ext:checkout.ci
 ```
 
+Keys can be limited to network ranges, using `allowedCidrs` (e.g. `["10.0.0.0/8"]`) when creating or
+patching them. When running behind a proxy, set `TRUSTD_API_KEY_TRUST_FORWARDED_FOR=true` to use
+the client address it reports. Only do this if the proxy overwrites the `Forwarded`/`X-Forwarded-For`
+headers, as clients can forge them otherwise.
+
+More than 20 failed attempts per minute from one address are rejected with `429`. The first use of a
+key each hour, and every rejected attempt for an existing key, are recorded in the audit log.
+
+To rotate the pepper, set the new one as `TRUSTD_API_KEY_PEPPER`, and the old one as
+`TRUSTD_API_KEY_PEPPER_PREVIOUS`. Keys are migrated to the new pepper on their next use. Keys which
+weren't used by the time the previous pepper is removed stop working.
+
 Tokens have the form `tfy_<key id>_<secret>_<checksum>`. The key ID is public, and shown in logs and
 the API. Revocations take effect immediately on the same instance, and within 60 seconds on others.
 The maximum lifetime of a key is configured using `TRUSTD_API_KEY_MAX_TTL` (default: `365d`).
@@ -155,3 +167,14 @@ bindings limit which SBOMs.
 With scoped authorization, a group `admin` may manage the role bindings and API keys of its groups,
 without the `manage.tenancy` permission. Keys can only be listed by passing a `group` it manages.
 Users and teams can only be managed with the `manage.tenancy` permission.
+
+## Audit log
+
+Every change, and the use of API keys, is recorded. The log can be read with the `manage.tenancy`
+permission, newest events first:
+
+```bash
+http GET localhost:8080/api/v3/audit targetKind==user action==delete since==2026-09-01T00:00:00Z
+```
+
+Events are kept for `TRUSTD_AUDIT_RETENTION` (default: `400d`).

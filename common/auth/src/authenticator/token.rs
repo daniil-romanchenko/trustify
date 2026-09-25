@@ -1,7 +1,18 @@
 //! Validation of bearer tokens which are not OIDC access tokens, like API keys.
 
 use crate::authenticator::{error::AuthenticationError, user::UserDetails};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, net::IpAddr};
+
+/// The network address of the client making a request.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ClientAddress {
+    /// The address of the peer of the connection.
+    pub peer: Option<IpAddr>,
+    /// The client address reported by a proxy (`Forwarded` or `X-Forwarded-For`).
+    ///
+    /// This can be forged by clients, unless a trusted proxy overwrites it.
+    pub forwarded: Option<IpAddr>,
+}
 
 /// Validates bearer tokens, other than OIDC access tokens.
 #[async_trait::async_trait]
@@ -10,7 +21,11 @@ pub trait TokenValidator: Send + Sync {
     ///
     /// Returns `None` if the token is not handled by this validator, so that other validators
     /// can try. Once a validator handles a token, the outcome is final.
-    async fn validate(&self, token: &str) -> Option<Result<UserDetails, AuthenticationError>>;
+    async fn validate(
+        &self,
+        token: &str,
+        client: ClientAddress,
+    ) -> Option<Result<UserDetails, AuthenticationError>>;
 }
 
 /// Information about the API key a request was authenticated with.

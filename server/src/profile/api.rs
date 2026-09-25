@@ -500,6 +500,9 @@ impl InitData {
 
         // shared across all workers, so that cache invalidation affects all of them
         let tenancy = Tenancy::new(&run.tenancy, db_rw.clone(), cache.clone());
+        if !run.read_only {
+            tenancy.spawn_maintenance(db_rw.clone());
+        }
 
         Ok(InitData {
             analysis: AnalysisService::new(run.analysis, db_ro.clone()),

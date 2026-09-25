@@ -43,6 +43,9 @@
 | `OPENAI_MODEL`                           | OpenAI model                                                                        | `gpt-4o`                                |
 | `TRUSTD_API_KEY_MAX_TTL`                 | Maximum lifetime of an API key (humantime)                                          | `365d`                                  |
 | `TRUSTD_API_KEY_PEPPER`                  | Secret (at least 32 characters) for deriving API key hashes; unset disables API keys |                                         |
+| `TRUSTD_API_KEY_PEPPER_PREVIOUS`         | Previous API key pepper, while rotating it; keys are migrated on their next use     |                                         |
+| `TRUSTD_API_KEY_TRUST_FORWARDED_FOR`     | Use the client address reported by a proxy for API keys; only behind a trusted proxy | `false`                                 |
+| `TRUSTD_AUDIT_RETENTION`                 | How long audit events of the tenancy module are kept (humantime)                    | `400d`                                  |
 | `TRUSTD_AUTHZ_MODE`                      | Authorization of SBOM access: `global` (permissions only) or `scoped` (role bindings) | `global`                                |
 | `TRUSTD_DEVMODE_ADDITIONAL_CLIENTS`      | Additional allowed development OAuth clients                                        |                                         |
 | `TRUSTD_DB_HOST`                         | Database address                                                                    | `localhost`                             |

@@ -20,6 +20,8 @@ pub struct Model {
     pub default_group: Option<Uuid>,
     pub labels: Labels,
     pub external_id: Option<String>,
+    /// Network ranges (CIDR notation) the key may be used from, `None` for any.
+    pub allowed_cidrs: Option<Vec<String>>,
 
     pub state: ApiKeyState,
     pub expires_at: time::OffsetDateTime,

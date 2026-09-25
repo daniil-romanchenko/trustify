@@ -7,7 +7,7 @@ use sea_orm::EntityTrait;
 use test_context::test_context;
 use test_log::test;
 use time::Duration as TimeDuration;
-use trustify_auth::authenticator::token::TokenValidator;
+use trustify_auth::authenticator::token::{ClientAddress, TokenValidator};
 use trustify_common::db;
 use trustify_entity::{labels::Labels, sbom_group};
 use trustify_test_context::TrustifyContext;
@@ -20,6 +20,13 @@ fn service() -> ApiKeyService {
         },
         PaginationCache::for_test(),
     )
+}
+
+fn client() -> ClientAddress {
+    ClientAddress {
+        peer: Some("192.0.2.1".parse().expect("valid address")),
+        forwarded: None,
+    }
 }
 
 fn actor() -> Actor {
@@ -38,6 +45,7 @@ fn request(groups: &[&str]) -> ApiKeyRequest {
         expires_at: OffsetDateTime::now_utc() + TimeDuration::days(30),
         labels: Labels::new().add("pipeline", "gitlab"),
         external_id: Some("checkout.ci".into()),
+        allowed_cidrs: None,
     }
 }
 
@@ -128,7 +136,7 @@ async fn lifecycle(ctx: &TrustifyContext) -> anyhow::Result<()> {
         .load(&token.key_id, &ctx.db)
         .await?
         .ok_or_else(|| anyhow::anyhow!("key must be usable"))?;
-    assert!(service.verify(&token, &model)?);
+    assert!(service.verify(&token, &model)?.is_valid());
     assert!(info.groups.contains(&acme.to_string()));
     assert!(info.groups.contains(&payments.to_string()));
     assert_eq!(
@@ -140,7 +148,7 @@ async fn lifecycle(ctx: &TrustifyContext) -> anyhow::Result<()> {
 
     let mut wrong = Token::generate()?;
     wrong.key_id = token.key_id.clone();
-    assert!(!service.verify(&wrong, &model)?);
+    assert!(!service.verify(&wrong, &model)?.is_valid());
 
     // patch
 
@@ -150,6 +158,7 @@ async fn lifecycle(ctx: &TrustifyContext) -> anyhow::Result<()> {
             ApiKeyPatch {
                 name: Some("renamed".into()),
                 labels: None,
+                allowed_cidrs: None,
             },
             &actor(),
             &ctx.db,
@@ -257,7 +266,8 @@ async fn lifecycle(ctx: &TrustifyContext) -> anyhow::Result<()> {
 async fn validator(ctx: &TrustifyContext) -> anyhow::Result<()> {
     let service = service();
     let group = create_group("acme", None, None, &ctx.db).await?;
-    let validator = ApiKeyValidator::new(service.clone(), db::ReadWrite::new(ctx.db.clone()));
+    let validator =
+        ApiKeyValidator::new(service.clone(), db::ReadWrite::new(ctx.db.clone()), false);
 
     let issued = service
         .create(request(&[&group.to_string()]), &actor(), &ctx.db)
@@ -265,13 +275,13 @@ async fn validator(ctx: &TrustifyContext) -> anyhow::Result<()> {
 
     // not an API key, left to other validators
 
-    assert!(validator.validate("eyJhbGciOi").await.is_none());
+    assert!(validator.validate("eyJhbGciOi", client()).await.is_none());
 
     // valid, twice, the second one from the cache
 
     for _ in 0..2 {
         let details = validator
-            .validate(&issued.token)
+            .validate(&issued.token, client())
             .await
             .ok_or_else(|| anyhow::anyhow!("must be handled"))??;
         assert_eq!(details.permissions, vec!["create.sbom"]);
@@ -287,18 +297,21 @@ async fn validator(ctx: &TrustifyContext) -> anyhow::Result<()> {
     let mut wrong = Token::generate()?;
     wrong.key_id = Token::parse(&issued.token)?.key_id;
     assert!(matches!(
-        validator.validate(&wrong.expose()).await,
+        validator.validate(&wrong.expose(), client()).await,
         Some(Err(_))
     ));
     // and doesn't lock out the real one
     assert!(matches!(
-        validator.validate(&issued.token).await,
+        validator.validate(&issued.token, client()).await,
         Some(Ok(_))
     ));
 
     // malformed
 
-    assert!(matches!(validator.validate("tfy_nope").await, Some(Err(_))));
+    assert!(matches!(
+        validator.validate("tfy_nope", client()).await,
+        Some(Err(_))
+    ));
 
     // use is recorded
 
@@ -315,8 +328,147 @@ async fn validator(ctx: &TrustifyContext) -> anyhow::Result<()> {
         .await?;
     validator.invalidate();
     assert!(matches!(
-        validator.validate(&issued.token).await,
+        validator.validate(&issued.token, client()).await,
         Some(Err(_))
+    ));
+
+    Ok(())
+}
+
+fn from(address: &str) -> ClientAddress {
+    ClientAddress {
+        peer: Some(address.parse().expect("valid address")),
+        forwarded: None,
+    }
+}
+
+#[test_context(TrustifyContext)]
+#[test(tokio::test)]
+async fn hardening(ctx: &TrustifyContext) -> anyhow::Result<()> {
+    use trustify_auth::authenticator::error::AuthenticationError;
+    use trustify_entity::audit_event;
+
+    let group = create_group("acme", None, None, &ctx.db).await?;
+    let old_pepper = "old pepper, old pepper, old pepper";
+    let new_pepper = "new pepper, new pepper, new pepper";
+
+    // a key created with the old pepper, only usable from 10.0.0.0/8
+
+    let old = ApiKeyService::new(
+        &TenancyConfig {
+            api_key_pepper: Some(old_pepper.into()),
+            ..Default::default()
+        },
+        PaginationCache::for_test(),
+    );
+    let mut req = request(&[&group.to_string()]);
+    req.allowed_cidrs = Some(vec!["10.0.0.0/8".into()]);
+    let issued = old.create(req, &actor(), &ctx.db).await?;
+    assert_eq!(issued.key.allowed_cidrs, Some(vec!["10.0.0.0/8".into()]));
+
+    // invalid ranges are rejected
+
+    let mut req = request(&[&group.to_string()]);
+    req.external_id = None;
+    req.allowed_cidrs = Some(vec!["10.0.0.0/33".into()]);
+    assert!(matches!(
+        old.create(req, &actor(), &ctx.db).await,
+        Err(Error::BadRequest(..))
+    ));
+
+    // rotate the pepper
+
+    let new = ApiKeyService::new(
+        &TenancyConfig {
+            api_key_pepper: Some(new_pepper.into()),
+            api_key_pepper_previous: Some(old_pepper.into()),
+            ..Default::default()
+        },
+        PaginationCache::for_test(),
+    );
+    let validator = ApiKeyValidator::new(new, db::ReadWrite::new(ctx.db.clone()), false);
+
+    // wrong network
+    assert!(matches!(
+        validator.validate(&issued.token, from("192.0.2.1")).await,
+        Some(Err(AuthenticationError::Failed))
+    ));
+    // allowed network, verified with the previous pepper, and migrated
+    assert!(matches!(
+        validator.validate(&issued.token, from("10.1.2.3")).await,
+        Some(Ok(_))
+    ));
+
+    let only_new = ApiKeyService::new(
+        &TenancyConfig {
+            api_key_pepper: Some(new_pepper.into()),
+            ..Default::default()
+        },
+        PaginationCache::for_test(),
+    );
+    let validator_new = ApiKeyValidator::new(only_new, db::ReadWrite::new(ctx.db.clone()), false);
+    assert!(matches!(
+        validator_new
+            .validate(&issued.token, from("10.1.2.3"))
+            .await,
+        Some(Ok(_))
+    ));
+
+    // use and rejections are audited
+
+    let actions: Vec<String> = audit_event::Entity::find()
+        .all(&ctx.db)
+        .await?
+        .into_iter()
+        .filter(|event| event.actor_kind == "api-key")
+        .map(|event| event.action)
+        .collect();
+    assert!(actions.contains(&"use".to_string()), "{actions:?}");
+    assert!(actions.contains(&"reject".to_string()), "{actions:?}");
+
+    // too many failures from one address are throttled, others are not affected
+
+    for _ in 0..20 {
+        let _ = validator.validate("tfy_guess", from("198.51.100.7")).await;
+    }
+    assert!(matches!(
+        validator
+            .validate(&issued.token, from("198.51.100.7"))
+            .await,
+        Some(Err(AuthenticationError::TooManyRequests))
+    ));
+    assert!(matches!(
+        validator.validate(&issued.token, from("10.1.2.3")).await,
+        Some(Ok(_))
+    ));
+
+    Ok(())
+}
+
+#[test_context(TrustifyContext)]
+#[test(tokio::test)]
+async fn trust_forwarded(ctx: &TrustifyContext) -> anyhow::Result<()> {
+    let group = create_group("acme", None, None, &ctx.db).await?;
+    let mut req = request(&[&group.to_string()]);
+    req.allowed_cidrs = Some(vec!["10.0.0.0/8".into()]);
+    let issued = service().create(req, &actor(), &ctx.db).await?;
+
+    // behind a proxy: the peer is the proxy, the client is forwarded
+    let behind_proxy = ClientAddress {
+        peer: Some("192.0.2.1".parse()?),
+        forwarded: Some("10.0.0.5".parse()?),
+    };
+
+    let untrusting = ApiKeyValidator::new(service(), db::ReadWrite::new(ctx.db.clone()), false);
+    assert!(matches!(
+        untrusting.validate(&issued.token, behind_proxy).await,
+        Some(Err(_))
+    ));
+
+    let trusting = ApiKeyValidator::new(service(), db::ReadWrite::new(ctx.db.clone()), true);
+    assert!(matches!(
+        trusting.validate(&issued.token, behind_proxy).await,
+        Some(Ok(_))
     ));
 
     Ok(())

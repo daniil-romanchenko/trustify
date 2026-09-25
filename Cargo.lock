@@ -8854,6 +8854,7 @@ dependencies = [
  "sea-query",
  "serde",
  "serde_json",
+ "strum 0.28.0",
  "test-context",
  "test-log",
  "thiserror 2.0.21",
