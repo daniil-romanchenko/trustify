@@ -28,6 +28,9 @@ pub struct ApiKey {
     /// The key can also be addressed using the key `ext:<external_id>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_id: Option<String>,
+    /// Network ranges (CIDR notation) the key may be used from, absent for any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_cidrs: Option<Vec<String>>,
     pub state: ApiKeyState,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = DateTime)]
@@ -60,6 +63,7 @@ impl ApiKey {
             default_group: model.default_group.map(|id| id.to_string()),
             labels: model.labels,
             external_id: model.external_id,
+            allowed_cidrs: model.allowed_cidrs,
             state: model.state,
             expires_at: model.expires_at,
             rotated_from: model.rotated_from.map(|id| id.to_string()),
@@ -104,6 +108,9 @@ pub struct ApiKeyRequest {
     /// An optional ID, assigned by an external system, unique across all API keys.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_id: Option<String>,
+    /// Network ranges (CIDR notation, e.g. `10.0.0.0/8`) the key may be used from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_cidrs: Option<Vec<String>>,
 }
 
 /// Changes to an API key. Scopes and expiration can only be changed by rotating the key.
@@ -114,6 +121,9 @@ pub struct ApiKeyPatch {
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub labels: Option<Labels>,
+    /// Replace the network ranges the key may be used from. An empty list allows any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_cidrs: Option<Vec<String>>,
 }
 
 /// Request to rotate an API key.

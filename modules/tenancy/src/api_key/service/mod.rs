@@ -4,6 +4,7 @@ mod test;
 use crate::{
     Error,
     api_key::{
+        cidr::Cidr,
         config::TenancyConfig,
         model::{ApiKey, ApiKeyPatch, ApiKeyRequest, ApiKeyState, IssuedApiKey, RotateRequest},
         token::{Pepper, Token},
@@ -49,6 +50,7 @@ pub struct ListOptions {
 #[derive(Clone)]
 pub struct ApiKeyService {
     pepper: Option<Pepper>,
+    previous_pepper: Option<Pepper>,
     max_ttl: Duration,
     cache: PaginationCache,
 }
@@ -62,9 +64,14 @@ impl ApiKeyService {
         if pepper.is_none() {
             log::info!("API keys are disabled, no pepper configured");
         }
+        let previous_pepper = config
+            .api_key_pepper_previous
+            .as_deref()
+            .map(|pepper| Pepper::new(pepper.as_bytes()));
 
         Self {
             pepper,
+            previous_pepper,
             max_ttl: config.api_key_max_ttl.into(),
             cache,
         }
@@ -103,6 +110,7 @@ impl ApiKeyService {
             .validate()
             .map_err(|err| Error::bad_request("Invalid labels", Some(err.to_string())))?;
         let permissions = validate_permissions(request.permissions)?;
+        let allowed_cidrs = validate_cidrs(request.allowed_cidrs)?;
         self.validate_expiration(request.expires_at)?;
 
         let groups = resolve_groups(&request.groups, db).await?;
@@ -119,6 +127,7 @@ impl ApiKeyService {
             default_group: Set(Some(default_group)),
             labels: Set(labels),
             external_id: Set(request.external_id),
+            allowed_cidrs: Set(allowed_cidrs),
             state: Set(ApiKeyState::Active),
             expires_at: Set(request.expires_at),
             rotated_from: Set(None),
@@ -252,6 +261,9 @@ impl ApiKeyService {
                 .map_err(|err| Error::bad_request("Invalid labels", Some(err.to_string())))?;
             model.labels = Set(labels);
         }
+        if let Some(allowed_cidrs) = patch.allowed_cidrs {
+            model.allowed_cidrs = Set(validate_cidrs(Some(allowed_cidrs))?);
+        }
 
         let model = model.update(db).await?;
         record(actor, "update", &model, json!({}), db).await?;
@@ -318,6 +330,7 @@ impl ApiKeyService {
             default_group: Set(old.default_group),
             labels: Set(old.labels.clone()),
             external_id: Set(external_id),
+            allowed_cidrs: Set(old.allowed_cidrs.clone()),
             state: Set(ApiKeyState::Active),
             expires_at: Set(request.expires_at),
             rotated_from: Set(Some(old.id)),
@@ -412,8 +425,42 @@ impl ApiKeyService {
     }
 
     /// Verify, in constant time, that a token matches a key.
-    pub fn verify(&self, token: &Token, key: &api_key::Model) -> Result<bool, Error> {
-        Ok(token.key_id == key.key_id && self.pepper()?.verify(token, &key.secret_hmac))
+    pub fn verify(&self, token: &Token, key: &api_key::Model) -> Result<Verification, Error> {
+        if token.key_id != key.key_id {
+            return Ok(Verification::Mismatch);
+        }
+
+        if self.pepper()?.verify(token, &key.secret_hmac) {
+            return Ok(Verification::Current);
+        }
+
+        if let Some(previous) = &self.previous_pepper
+            && previous.verify(token, &key.secret_hmac)
+        {
+            return Ok(Verification::Previous);
+        }
+
+        Ok(Verification::Mismatch)
+    }
+
+    /// Store the HMAC of the key's secret, using the current pepper.
+    ///
+    /// This migrates keys created using a previous pepper.
+    pub async fn rehash(
+        &self,
+        token: &Token,
+        key: &api_key::Model,
+        db: &impl ConnectionTrait,
+    ) -> Result<(), Error> {
+        api_key::Entity::update_many()
+            .col_expr(
+                api_key::Column::SecretHmac,
+                Expr::value(self.pepper()?.sign(token)),
+            )
+            .filter(api_key::Column::Id.eq(key.id))
+            .exec(db)
+            .await?;
+        Ok(())
     }
 
     fn validate_expiration(&self, expires_at: OffsetDateTime) -> Result<(), Error> {
@@ -455,6 +502,40 @@ pub async fn touch(
         .await?;
 
     Ok(())
+}
+
+/// The outcome of verifying a token.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Verification {
+    /// The token doesn't match the key.
+    Mismatch,
+    /// The token matches, using the current pepper.
+    Current,
+    /// The token matches, using the previous pepper.
+    Previous,
+}
+
+impl Verification {
+    pub fn is_valid(&self) -> bool {
+        !matches!(self, Self::Mismatch)
+    }
+}
+
+/// Validate and normalize network ranges, an empty list means any.
+fn validate_cidrs(cidrs: Option<Vec<String>>) -> Result<Option<Vec<String>>, Error> {
+    let Some(cidrs) = cidrs.filter(|cidrs| !cidrs.is_empty()) else {
+        return Ok(None);
+    };
+
+    cidrs
+        .iter()
+        .map(|cidr| {
+            cidr.parse::<Cidr>()
+                .map(|cidr| cidr.to_string())
+                .map_err(|err| Error::bad_request("Invalid network range", Some(err.to_string())))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
 }
 
 fn validate_permissions(permissions: Option<Vec<String>>) -> Result<Vec<String>, Error> {
