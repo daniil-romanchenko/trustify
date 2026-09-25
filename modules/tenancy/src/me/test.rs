@@ -25,7 +25,10 @@ async fn anonymous_and_without_email(ctx: &TrustifyContext) -> anyhow::Result<()
     let me: Value = app
         .call_and_read_body_json(TestRequest::get().uri("/api/v3/me").to_request())
         .await;
-    assert_eq!(me, json!({"permissions": [], "access": []}));
+    assert_eq!(
+        me,
+        json!({"permissions": [], "access": [], "scoped": false})
+    );
 
     let me: Value = app
         .call_and_read_body_json(
@@ -37,7 +40,13 @@ async fn anonymous_and_without_email(ctx: &TrustifyContext) -> anyhow::Result<()
         .await;
     assert_eq!(
         me,
-        json!({"subject": "sub-1", "permissions": ["read.sbom"], "access": []})
+        json!({
+            "subject": "sub-1",
+            "permissions": ["read.sbom"],
+            "effectivePermissions": ["read.sbom"],
+            "access": [],
+            "scoped": false,
+        })
     );
 
     // no user was created
@@ -131,6 +140,49 @@ async fn provisioned_user(ctx: &TrustifyContext) -> anyhow::Result<()> {
         )
         .await;
     assert_eq!(me["user"]["state"], "active");
+
+    Ok(())
+}
+
+#[test_context(TrustifyContext)]
+#[test(actix_web::test)]
+async fn scoped(ctx: &TrustifyContext) -> anyhow::Result<()> {
+    use actix_http::HttpMessage;
+    use std::collections::{HashMap, HashSet};
+    use trustify_auth::{Permission, authorizer::AccessScope};
+    use uuid::Uuid;
+
+    let app = caller(ctx).await?;
+    let group = Uuid::now_v7();
+    let scope = AccessScope::scoped(HashMap::from([(
+        group,
+        HashSet::from([Permission::ReadSbom, Permission::CreateSbom]),
+    )]));
+
+    let mut user = details("sub-1", None);
+    user.permissions = vec![
+        "read.sbom".into(),
+        "create.sbom".into(),
+        "delete.sbom".into(),
+        "read.advisory".into(),
+    ];
+    let request = TestRequest::get()
+        .uri("/api/v3/me")
+        .to_request()
+        .test_auth_details(user);
+    request.extensions_mut().insert(scope);
+
+    let me: Value = app.call_and_read_body_json(request).await;
+    assert_eq!(me["scoped"], true);
+    // delete.sbom is granted globally, but not by any role, read.advisory isn't scoped at all
+    assert_eq!(
+        me["effectivePermissions"],
+        json!(["read.sbom", "create.sbom", "read.advisory"])
+    );
+    assert_eq!(
+        me["groups"],
+        json!([{"id": group.to_string(), "permissions": ["create.sbom", "read.sbom"]}])
+    );
 
     Ok(())
 }

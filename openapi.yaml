@@ -7148,6 +7148,20 @@ components:
 
               Only present when `parents=resolve` is requested.
       description: Result of listing SBOM groups, with optional resolved parent references.
+    GroupPermissions:
+      type: object
+      description: The permissions granted in a group.
+      required:
+      - id
+      - permissions
+      properties:
+        id:
+          type: string
+          description: The ID of the group.
+        permissions:
+          type: array
+          items:
+            type: string
     GroupRequest:
       type: object
       description: Mutable properties of a [`Group`].
@@ -7509,17 +7523,37 @@ components:
       required:
       - permissions
       - access
+      - scoped
       properties:
         access:
           type: array
           items:
             $ref: '#/components/schemas/Access'
           description: Roles on SBOM groups, granted to the user directly or through teams.
+        effectivePermissions:
+          type:
+          - array
+          - 'null'
+          items:
+            type: string
+          description: |-
+            The permissions which can actually be used, in at least one group when scoped.
+
+            This is intended for deciding which actions to offer. `None` means all permissions, e.g.
+            when authentication is disabled.
+        groups:
+          type: array
+          items:
+            $ref: '#/components/schemas/GroupPermissions'
+          description: The groups accessible when scoped, including descendants of bound groups.
         permissions:
           type: array
           items:
             type: string
           description: Global permissions, granted through the access token.
+        scoped:
+          type: boolean
+          description: Whether access to SBOMs is limited to the groups in [`Self::groups`].
         subject:
           type:
           - string
