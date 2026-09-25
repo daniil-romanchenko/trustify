@@ -47,8 +47,8 @@ pub struct Change<'a> {
 
 /// Record a change to the tenancy configuration.
 ///
-/// This writes an audit event, and bumps the authorization revision, which invalidates cached
-/// authorization information. It must be called using the same transaction as the change itself.
+/// This writes an audit event. It must be called using the same transaction as the change itself.
+/// Changes relevant to authorization bump the authorization revision through database triggers.
 pub async fn record(
     actor: &Actor,
     change: Change<'_>,
@@ -77,9 +77,6 @@ pub async fn record(
     })
     .exec_without_returning(db)
     .await?;
-
-    db.execute_unprepared("UPDATE authz_revision SET value = value + 1")
-        .await?;
 
     Ok(())
 }

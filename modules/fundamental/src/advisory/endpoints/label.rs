@@ -50,7 +50,14 @@ pub async fn all(
     authorizer.require(&user, Permission::ReadAdvisory)?;
 
     let tx = db.begin().await?;
-    let result = fetch_labels(DocumentType::Advisory, query.filter_text, query.limit, &tx).await?;
+    let result = fetch_labels(
+        DocumentType::Advisory,
+        query.filter_text,
+        query.limit,
+        None,
+        &tx,
+    )
+    .await?;
 
     Ok(HttpResponse::Ok().json(result))
 }

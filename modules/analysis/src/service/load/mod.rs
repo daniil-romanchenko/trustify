@@ -338,6 +338,7 @@ impl InnerService {
         &self,
         connection: &C,
         query: GraphQuery<'_>,
+        visible_groups: Option<&[Uuid]>,
     ) -> Result<Vec<(Uuid, Arc<PackageGraph>)>, Error>
     where
         C: ConnectionTrait + Send + Sync,
@@ -411,6 +412,21 @@ impl InnerService {
         };
 
         log::debug!("SBOM IDs to evaluate: {}", TruncatedIter(&matched_sbom_ids));
+
+        // only consider visible SBOMs, so that "latest" is determined among them
+        let matched_sbom_ids = match crate::service::scope::visible_sboms(
+            visible_groups,
+            matched_sbom_ids.iter().map(|row| row.sbom_id),
+            connection,
+        )
+        .await?
+        {
+            Some(visible) => matched_sbom_ids
+                .into_iter()
+                .filter(|row| visible.contains(&row.sbom_id))
+                .collect(),
+            None => matched_sbom_ids,
+        };
 
         // filter by published-date cutoff (only when configured)
         let matched_sbom_ids = if let Some(days) = self.sbom_published_cutoff_days {

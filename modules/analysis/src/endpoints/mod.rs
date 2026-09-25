@@ -3,7 +3,7 @@ mod query;
 #[cfg(test)]
 mod tests;
 
-use super::service::{AnalysisService, QueryOptions};
+use super::service::{AnalysisService, QueryOptions, scope::visible_sboms};
 use crate::{
     endpoints::query::OwnedComponentReference,
     error::Error,
@@ -16,7 +16,7 @@ use serde_json::json;
 use trustify_auth::{
     Permission, ReadSbom, ReadSystemInformation,
     authenticator::user::UserInformation,
-    authorizer::{Authorizer, Require},
+    authorizer::{AccessScope, Authorizer, Require},
     utoipa::AuthResponse,
 };
 use trustify_common::{
@@ -24,6 +24,7 @@ use trustify_common::{
     model::{Paginated, PaginatedResults},
 };
 use utoipa_actix_web::service_config::ServiceConfig;
+use uuid::Uuid;
 
 pub fn configure(config: &mut ServiceConfig, db: db::ReadOnly, analysis: AnalysisService) {
     config
@@ -90,12 +91,17 @@ pub async fn get_component(
     key: web::Path<String>,
     web::Query(options): web::Query<QueryOptions>,
     web::Query(paginated): web::Query<Paginated>,
+    scope: AccessScope,
     _: Require<ReadSbom>,
 ) -> Result<impl Responder, Error> {
     let query = OwnedComponentReference::try_from(key.as_str())?;
     let tx = db.begin().await?;
 
-    Ok(HttpResponse::Ok().json(service.retrieve(&query, options, paginated, &tx).await?))
+    Ok(HttpResponse::Ok().json(
+        service
+            .retrieve_scoped(&query, options, paginated, visible(&scope), &tx)
+            .await?,
+    ))
 }
 
 #[utoipa::path(
@@ -119,10 +125,15 @@ pub async fn search_component(
     web::Query(search): web::Query<Query>,
     web::Query(options): web::Query<QueryOptions>,
     web::Query(paginated): web::Query<Paginated>,
+    scope: AccessScope,
     _: Require<ReadSbom>,
 ) -> Result<impl Responder, Error> {
     let tx = db.begin().await?;
-    Ok(HttpResponse::Ok().json(service.retrieve(&search, options, paginated, &tx).await?))
+    Ok(HttpResponse::Ok().json(
+        service
+            .retrieve_scoped(&search, options, paginated, visible(&scope), &tx)
+            .await?,
+    ))
 }
 
 #[utoipa::path(
@@ -145,6 +156,7 @@ pub async fn render_sbom_graph(
     service: web::Data<AnalysisService>,
     db: web::Data<db::ReadOnly>,
     path: web::Path<(String, String)>,
+    scope: AccessScope,
     _: Require<ReadSbom>,
 ) -> Result<impl Responder, Error> {
     let (sbom, ext) = path.into_inner();
@@ -155,6 +167,12 @@ pub async fn render_sbom_graph(
 
     let sbom = parse_sbom_id(&sbom)?;
     let tx = db.begin().await?;
+
+    if let Some(visible) = visible_sboms(visible(&scope).as_deref(), [sbom], &tx).await?
+        && !visible.contains(&sbom)
+    {
+        return Ok(HttpResponse::NotFound().finish());
+    }
 
     let graph = service.load_graph(&tx, sbom).await?;
 
@@ -186,12 +204,13 @@ pub async fn search_latest_component(
     web::Query(search): web::Query<Query>,
     web::Query(options): web::Query<QueryOptions>,
     web::Query(paginated): web::Query<Paginated>,
+    scope: AccessScope,
     _: Require<ReadSbom>,
 ) -> Result<impl Responder, Error> {
     let tx = db.begin().await?;
     Ok(HttpResponse::Ok().json(
         service
-            .retrieve_latest(&search, options, paginated, &tx)
+            .retrieve_latest_scoped(&search, options, paginated, visible(&scope), &tx)
             .await?,
     ))
 }
@@ -217,6 +236,7 @@ pub async fn get_latest_component(
     key: web::Path<String>,
     web::Query(options): web::Query<QueryOptions>,
     web::Query(paginated): web::Query<Paginated>,
+    scope: AccessScope,
     _: Require<ReadSbom>,
 ) -> Result<impl Responder, Error> {
     let query = OwnedComponentReference::try_from(key.as_str())?;
@@ -224,7 +244,12 @@ pub async fn get_latest_component(
 
     Ok(HttpResponse::Ok().json(
         service
-            .retrieve_latest(&query, options, paginated, &tx)
+            .retrieve_latest_scoped(&query, options, paginated, visible(&scope), &tx)
             .await?,
     ))
+}
+
+/// The groups in which SBOMs are visible, `None` for no restriction.
+fn visible(scope: &AccessScope) -> Option<Vec<Uuid>> {
+    scope.groups_with(Permission::ReadSbom)
 }

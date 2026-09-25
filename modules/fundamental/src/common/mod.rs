@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use trustify_entity::sbom_package_license::LicenseCategory;
 use utoipa::ToSchema;
 
+pub mod access;
 pub mod license_filtering;
 pub mod model;
 pub mod service;

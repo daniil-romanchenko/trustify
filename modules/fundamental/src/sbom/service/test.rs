@@ -96,6 +96,7 @@ async fn count_sboms(ctx: &TrustifyContext) -> Result<(), anyhow::Error> {
                 SbomExternalPackageReference::Purl(&both_purl),
                 SbomExternalPackageReference::Purl(&one_purl),
             ],
+            None,
             &ctx.db,
         )
         .await?;

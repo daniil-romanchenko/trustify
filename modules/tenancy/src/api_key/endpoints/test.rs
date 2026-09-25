@@ -206,3 +206,136 @@ async fn api_key_principal_is_restricted(ctx: &TrustifyContext) -> anyhow::Resul
 
     Ok(())
 }
+
+/// A group admin may manage bindings and API keys of its groups, but not of others.
+#[test_context(TrustifyContext)]
+#[test(actix_web::test)]
+async fn delegated_admin(ctx: &TrustifyContext) -> anyhow::Result<()> {
+    use actix_http::{HttpMessage, Request};
+    use std::collections::{HashMap, HashSet};
+    use trustify_auth::{Permission, authorizer::AccessScope};
+
+    let app = crate::test::caller_authorized(ctx).await?;
+    let a = create_group("a", None, Some("a"), &ctx.db).await?;
+    create_group("b", None, Some("b"), &ctx.db).await?;
+
+    let as_user = |request: TestRequest, scope: Option<AccessScope>, permissions: &[&str]| {
+        let request: Request = request.to_request().test_auth_details(UserDetails {
+            id: "admin".into(),
+            permissions: permissions.iter().map(ToString::to_string).collect(),
+            ..Default::default()
+        });
+        if let Some(scope) = scope {
+            request.extensions_mut().insert(scope);
+        }
+        request
+    };
+    let admin_a = AccessScope::scoped(HashMap::from([(
+        a,
+        HashSet::from([Permission::ManageTenancy, Permission::ReadSbomGroup]),
+    )]));
+    let delegated = |request: TestRequest| as_user(request, Some(admin_a.clone()), &[]);
+    let global = |request: TestRequest| as_user(request, None, &["manage.tenancy"]);
+
+    // bindings: own group yes, other group looks like it doesn't exist
+
+    for (group, expected) in [("a", StatusCode::NO_CONTENT), ("b", StatusCode::NOT_FOUND)] {
+        let response = app
+            .call_service(delegated(
+                TestRequest::put()
+                    .uri(&format!(
+                        "/api/v3/group/sbom/ext:{group}/binding/user/dev@acme.com"
+                    ))
+                    .set_json(json!({"role": "viewer"})),
+            ))
+            .await;
+        assert_eq!(response.status(), expected, "binding on {group}");
+    }
+
+    // users are only managed globally
+
+    let response = app
+        .call_service(delegated(TestRequest::get().uri("/api/v3/user")))
+        .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    // API keys
+
+    let create = |group: &str| -> anyhow::Result<TestRequest> {
+        Ok(TestRequest::post().uri("/api/v3/api-key").set_json(json!({
+            "name": "ci",
+            "groups": [format!("ext:{group}")],
+            "expiresAt": in_days(1)?,
+        })))
+    };
+
+    let response = app.call_service(delegated(create("a")?)).await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let response = app.call_service(delegated(create("b")?)).await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let response = app.call_service(global(create("b")?)).await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let key_b: Value = actix_web::test::read_body_json(response).await;
+    let key_b = key_b["id"].as_str().unwrap_or_default().to_string();
+
+    // listing requires a managed group
+
+    let response = app
+        .call_service(delegated(TestRequest::get().uri("/api/v3/api-key")))
+        .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let keys: Value = app
+        .call_and_read_body_json(delegated(
+            TestRequest::get().uri("/api/v3/api-key?group=ext:a"),
+        ))
+        .await;
+    assert_eq!(keys["items"].as_array().map(Vec::len), Some(1));
+
+    // the key of the other group can't be read, rotated, or revoked
+
+    let response = app
+        .call_service(delegated(
+            TestRequest::get().uri(&format!("/api/v3/api-key/{key_b}")),
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let response = app
+        .call_service(delegated(
+            TestRequest::post()
+                .uri(&format!("/api/v3/api-key/{key_b}/rotate"))
+                .set_json(json!({"expiresAt": in_days(1)?})),
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let response = app
+        .call_service(delegated(
+            TestRequest::delete().uri(&format!("/api/v3/api-key/{key_b}")),
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let key: Value = app
+        .call_and_read_body_json(global(
+            TestRequest::get().uri(&format!("/api/v3/api-key/{key_b}")),
+        ))
+        .await;
+    assert_eq!(key["state"], "active");
+
+    // without scoped authorization, nothing is delegated
+
+    let response = app
+        .call_service(as_user(
+            TestRequest::put()
+                .uri("/api/v3/group/sbom/ext:a/binding/user/dev@acme.com")
+                .set_json(json!({"role": "viewer"})),
+            None,
+            &[],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    Ok(())
+}

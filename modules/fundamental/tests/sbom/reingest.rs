@@ -97,6 +97,7 @@ async fn quarkus(ctx: &TrustifyContext) -> Result<(), anyhow::Error> {
                 total: true,
             },
             Query::default(),
+            None,
             &ctx.db,
         )
         .await?;
