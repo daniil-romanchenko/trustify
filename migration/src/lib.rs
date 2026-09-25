@@ -88,6 +88,7 @@ mod m0002400_base_purl_name_index;
 mod m0002500_create_tenancy;
 mod m0002510_create_api_key;
 mod m0002520_authz_revision_triggers;
+mod m0002530_api_key_allowed_cidrs;
 
 pub trait MigratorExt: Send {
     fn build_migrations() -> Migrations;
@@ -191,6 +192,7 @@ impl MigratorExt for Migrator {
             .normal(m0002500_create_tenancy::Migration)
             .normal(m0002510_create_api_key::Migration)
             .normal(m0002520_authz_revision_triggers::Migration)
+            .normal(m0002530_api_key_allowed_cidrs::Migration)
     }
 }
 

@@ -5,6 +5,8 @@ use trustify_common::error::ErrorInformation;
 pub enum AuthenticationError {
     #[error("Authentication failed")]
     Failed,
+    #[error("Too many failed authentication attempts")]
+    TooManyRequests,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -22,6 +24,13 @@ impl actix_web::ResponseError for AuthenticationError {
                 message: self.to_string(),
                 details: None,
             }),
+            Self::TooManyRequests => {
+                actix_web::HttpResponse::TooManyRequests().json(ErrorInformation {
+                    error: "TooManyRequests".into(),
+                    message: self.to_string(),
+                    details: None,
+                })
+            }
         }
     }
 }

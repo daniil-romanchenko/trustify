@@ -6,7 +6,10 @@ use crate::{
     user::service::UserService,
 };
 use actix_web::web;
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
+
+/// How often background maintenance runs.
+const MAINTENANCE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 use trustify_auth::authenticator::token::TokenValidator;
 use trustify_common::db::{self, pagination_cache::PaginationCache};
 
@@ -16,6 +19,7 @@ pub struct Tenancy {
     pub resolver: Arc<PrincipalResolver>,
     pub api_keys: ApiKeyService,
     pub api_key_validator: Arc<ApiKeyValidator>,
+    audit_retention: Duration,
 }
 
 impl Tenancy {
@@ -27,9 +31,32 @@ impl Tenancy {
                 !config.no_just_in_time_users,
                 config.authz_mode,
             )),
-            api_key_validator: Arc::new(ApiKeyValidator::new(api_keys.clone(), db_rw)),
+            api_key_validator: Arc::new(ApiKeyValidator::new(
+                api_keys.clone(),
+                db_rw,
+                config.api_key_trust_forwarded_for,
+            )),
             api_keys,
+            audit_retention: config.audit_retention.into(),
         }
+    }
+
+    /// Spawn background maintenance, like pruning old audit events.
+    ///
+    /// This should be called once per instance, and not in read-only mode.
+    pub fn spawn_maintenance(&self, db: db::ReadWrite) {
+        let retention = self.audit_retention;
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(MAINTENANCE_INTERVAL);
+            loop {
+                interval.tick().await;
+                match crate::audit::prune(retention, &db).await {
+                    Ok(0) => {}
+                    Ok(count) => log::info!("Pruned {count} audit events"),
+                    Err(err) => log::warn!("Failed to prune audit events: {err}"),
+                }
+            }
+        });
     }
 
     /// Validators for additional bearer tokens, to be registered with the authenticator.
@@ -57,11 +84,13 @@ pub fn configure(
         .app_data(web::Data::new(db_rw))
         .app_data(web::Data::new(db_ro))
         .app_data(web::Data::new(UserService::new(cache.clone())))
-        .app_data(web::Data::new(TeamService::new(cache)))
+        .app_data(web::Data::new(TeamService::new(cache.clone())))
+        .app_data(web::Data::new(cache))
         .app_data(web::Data::new(BindingService::new()))
         .configure(crate::user::endpoints::configure)
         .configure(crate::team::endpoints::configure)
         .configure(crate::binding::endpoints::configure)
         .configure(crate::api_key::endpoints::configure)
-        .configure(crate::me::configure);
+        .configure(crate::me::configure)
+        .configure(crate::audit_log::configure);
 }
