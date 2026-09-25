@@ -1,0 +1,17 @@
+//! Tenancy management: users, teams, and their role bindings on SBOM groups.
+//!
+//! This module is intended to be driven by an external orchestration platform, which holds the
+//! `manage.tenancy` permission.
+
+pub mod audit;
+pub mod binding;
+pub mod email;
+pub mod endpoints;
+pub mod error;
+pub mod team;
+pub mod user;
+
+#[cfg(test)]
+mod test;
+
+pub use error::Error;

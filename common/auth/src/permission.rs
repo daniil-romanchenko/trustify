@@ -131,6 +131,13 @@ permission! {
         UpdateExploit,
         #[strum(serialize = "delete.exploit")]
         DeleteExploit,
+
+        /// Manage users, teams, role bindings, and API keys, across all groups.
+        ///
+        /// This permission is intended for an orchestration platform, and is not part of the
+        /// default scope mappings.
+        #[strum(serialize = "manage.tenancy")]
+        ManageTenancy,
     }
 }
 

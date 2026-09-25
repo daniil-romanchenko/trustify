@@ -742,7 +742,7 @@ pub(crate) fn configure(svc: &mut utoipa_actix_web::service_config::ServiceConfi
                     db_ro.clone(),
                     storage,
                     analysis.clone(),
-                    cache,
+                    cache.clone(),
                     graph,
                     validators,
                 );
@@ -753,6 +753,12 @@ pub(crate) fn configure(svc: &mut utoipa_actix_web::service_config::ServiceConfi
                     ei_service.clone(),
                 );
                 trustify_module_analysis::endpoints::configure(svc, db_ro.clone(), analysis);
+                trustify_module_tenancy::endpoints::configure(
+                    svc,
+                    db_rw.clone(),
+                    db_ro.clone(),
+                    cache,
+                );
                 trustify_module_user::endpoints::configure(svc);
                 trustify_module_ui::endpoints::configure(svc, ui)
             }),
