@@ -23,6 +23,16 @@ pub struct Group {
     /// Additional group labels
     #[serde(default, skip_serializing_if = "Labels::is_empty")]
     pub labels: Labels,
+
+    /// An optional, free-form classification of the group, e.g. `organization` or `project`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+
+    /// An optional ID, assigned by an external system
+    ///
+    /// The group can also be addressed using the key `ext:<external_id>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<String>,
 }
 
 impl From<sbom_group::Model> for Group {
@@ -33,6 +43,8 @@ impl From<sbom_group::Model> for Group {
             name: value.name,
             description: value.description,
             labels: value.labels,
+            kind: value.kind,
+            external_id: value.external_id,
         }
     }
 }
@@ -90,6 +102,14 @@ pub struct GroupRequest {
 
     #[serde(default, skip_serializing_if = "Labels::is_empty")]
     pub labels: Labels,
+
+    /// An optional, free-form classification of the group, e.g. `organization` or `project`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+
+    /// An optional ID, assigned by an external system, unique across all groups
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<String>,
 }
 
 /// Result of listing SBOM groups, with optional resolved parent references.

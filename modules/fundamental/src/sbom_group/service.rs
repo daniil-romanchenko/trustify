@@ -22,6 +22,7 @@ use trustify_common::{
         query::{Filtering, Query},
     },
     model::{PaginatedResults, Pagination, Revisioned},
+    resource_key::{EXTERNAL_ID_PREFIX, validate_external_id},
 };
 use trustify_entity::{sbom, sbom_group, sbom_group_assignment};
 use utoipa::{IntoParams, ToSchema};
@@ -306,8 +307,9 @@ WHERE parent IS NULL
         db: &impl ConnectionTrait,
     ) -> Result<Revisioned<String>, Error> {
         self.validate_group_name_or_fail(&group.name)?;
+        validate_external_id_or_fail(group.external_id.as_deref())?;
 
-        let parent = parse_parent_group(group.parent.as_deref())?;
+        let parent = self.resolve_parent(group.parent.as_deref(), db).await?;
 
         let id = Uuid::now_v7();
         let revision = Uuid::now_v7();
@@ -319,11 +321,13 @@ WHERE parent IS NULL
             description: Set(group.description),
             revision: Set(revision),
             labels: Set(group.labels.validate()?),
+            kind: Set(group.kind),
+            external_id: Set(group.external_id),
         };
 
         group.insert(db).await.map_err(|err| {
             if err.is_duplicate() {
-                Error::Conflict("A group with this name already exists at this level".into())
+                Error::Conflict(DUPLICATE_GROUP.into())
             } else {
                 err.into()
             }
@@ -386,12 +390,14 @@ WHERE parent IS NULL
         db: &impl ConnectionTrait,
     ) -> Result<(), Error> {
         self.validate_group_name_or_fail(&group.name)?;
+        validate_external_id_or_fail(group.external_id.as_deref())?;
 
-        let parent = parse_parent_group(group.parent.as_deref())?;
+        let parent = self.resolve_parent(group.parent.as_deref(), db).await?;
 
         // Validate that setting this parent won't create a cycle
-        if let Some(parent_id) = &group.parent {
-            self.validate_no_cycle(id, parent_id, db).await?;
+        if let Some(parent_id) = parent {
+            self.validate_no_cycle(id, &parent_id.to_string(), db)
+                .await?;
         }
 
         self.update_columns(
@@ -402,6 +408,8 @@ WHERE parent IS NULL
                 (sbom_group::Column::Parent, parent.into()),
                 (sbom_group::Column::Description, group.description.into()),
                 (sbom_group::Column::Labels, group.labels.validate()?.into()),
+                (sbom_group::Column::Kind, group.kind.into()),
+                (sbom_group::Column::ExternalId, group.external_id.into()),
             ],
             db,
         )
@@ -487,7 +495,7 @@ WHERE parent IS NULL
         // execute update
         let result = update.exec(db).await.map_err(|err| {
             if err.is_duplicate() {
-                Error::Conflict("A group with this name already exists at this level".into())
+                Error::Conflict(DUPLICATE_GROUP.into())
             } else {
                 err.into()
             }
@@ -523,18 +531,51 @@ WHERE parent IS NULL
             return Ok(None);
         };
 
-        let value = Group {
-            id: group.id.to_string(),
-            name: group.name,
-            parent: group.parent.map(|id| id.to_string()),
-            description: group.description,
-            labels: group.labels,
-        };
+        let revision = group.revision.to_string();
 
         Ok(Some(Revisioned {
-            value,
-            revision: group.revision.to_string(),
+            value: group.into(),
+            revision,
         }))
+    }
+
+    /// Resolve the parent reference of a group request, which may be an external key.
+    async fn resolve_parent(
+        &self,
+        parent: Option<&str>,
+        db: &impl ConnectionTrait,
+    ) -> Result<Option<Uuid>, Error> {
+        let Some(parent) = parent else {
+            return Ok(None);
+        };
+
+        let parent = self
+            .resolve_key(parent, db)
+            .await?
+            .ok_or_else(|| Error::BadRequest("Parent group not found".into(), None))?;
+
+        parse_parent_group(Some(&parent))
+    }
+
+    /// Resolve a group key into the group's ID.
+    ///
+    /// The key may either be an ID, or an external ID prefixed with `ext:`. An ID is returned
+    /// as-is, without checking whether the group exists. For an external ID, `None` is returned
+    /// if no group with that external ID exists.
+    pub async fn resolve_key(
+        &self,
+        key: &str,
+        db: &impl ConnectionTrait,
+    ) -> Result<Option<String>, Error> {
+        let Some(external_id) = key.strip_prefix(EXTERNAL_ID_PREFIX) else {
+            return Ok(Some(key.to_string()));
+        };
+
+        Ok(sbom_group::Entity::find()
+            .filter(sbom_group::Column::ExternalId.eq(external_id))
+            .one(db)
+            .await?
+            .map(|group| group.id.to_string()))
     }
 
     /// Ensure a group name is valid
@@ -886,6 +927,17 @@ fn parse_group_ids(group_ids: &[String]) -> Result<Vec<Uuid>, Error> {
 /// Parse parent group string into UUID.
 ///
 /// If the format is invalid, we claim it was not found, what is actually true.
+const DUPLICATE_GROUP: &str =
+    "A group with this name already exists at this level, or the external ID is already in use";
+
+fn validate_external_id_or_fail(external_id: Option<&str>) -> Result<(), Error> {
+    if let Some(external_id) = external_id {
+        validate_external_id(external_id)
+            .map_err(|err| Error::bad_request("Invalid external ID", Some(err.to_string())))?;
+    }
+    Ok(())
+}
+
 fn parse_parent_group(parent: Option<&str>) -> Result<Option<Uuid>, Error> {
     parent
         .map(Uuid::parse_str)

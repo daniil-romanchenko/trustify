@@ -14,6 +14,11 @@ pub struct Model {
     pub revision: Uuid,
 
     pub labels: Labels,
+
+    /// Optional, free-form classification, e.g. `organization`, `team`, `project`.
+    pub kind: Option<String>,
+    /// Optional identifier assigned by an external system, unique across all groups.
+    pub external_id: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

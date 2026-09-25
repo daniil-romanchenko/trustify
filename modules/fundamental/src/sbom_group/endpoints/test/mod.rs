@@ -1,6 +1,7 @@
 mod assignment;
 mod create;
 mod delete;
+mod external_id;
 mod list;
 mod update;
 

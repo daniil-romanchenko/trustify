@@ -15,13 +15,16 @@ use sea_orm::TransactionTrait;
 use serde::Serialize;
 use serde_json::json;
 use trustify_auth::{
-    CreateSbomGroup, DeleteSbomGroup, ReadSbom, ReadSbomGroup, UpdateSbom, UpdateSbomGroup,
-    authorizer::Require,
+    CreateSbomGroup, DeleteSbomGroup, Permission, ReadSbom, ReadSbomGroup, UpdateSbom,
+    UpdateSbomGroup,
+    authenticator::user::UserInformation,
+    authorizer::{Authorizer, Require},
 };
 use trustify_common::{
     db::{self, pagination_cache::PaginationCache, query::Query},
     endpoints::extract_revision,
     model::{Paginated, Revisioned},
+    resource_key::EXTERNAL_ID_PREFIX,
 };
 use utoipa::ToSchema;
 
@@ -134,7 +137,7 @@ async fn create(
     operation_id = "deleteSbomGroup",
     request_body = GroupRequest,
     params(
-        ("id", Path, description = "The ID of the group to delete"),
+        ("id", Path, description = "The ID of the group to delete, or `ext:<external id>`"),
         ("if-match" = Option<String>, Header, description = "The revision to delete"),
     ),
     responses(
@@ -158,6 +161,11 @@ async fn delete(
     let revision = extract_revision(&if_match);
 
     let tx = db.begin().await?;
+    // an unknown external ID is handled like any other unknown ID
+    let id = service
+        .resolve_key(&id, &tx)
+        .await?
+        .unwrap_or(id.into_inner());
     service.delete(&id, revision, &tx).await?;
     tx.commit().await?;
 
@@ -169,33 +177,82 @@ async fn delete(
     operation_id = "updateSbomGroup",
     request_body = GroupRequest,
     params(
-        ("id", Path, description = "The ID of the group to update"),
+        ("id", Path, description = "The ID of the group to update, or `ext:<external id>`"),
         ("if-match" = Option<String>, Header, description = "The revision to update"),
     ),
     responses(
-        (status = 204, description = "The group was delete or did not exist"),
+        (status = 201, description = "The group was addressed by external ID and has been created", body = CreateResponse),
+        (status = 204, description = "The group was updated"),
         (status = 400, description = "The request was not valid"),
         (status = 401, description = "The user was not authenticated"),
         (status = 403, description = "The user authenticated, but not authorized for this operation"),
+        (status = 404, description = "The group was not found"),
         (status = 409, description = "The name of the group is not unique within the parent"),
         (status = 409, description = "Assigning the parent would create a cycle"),
         (status = 412, description = "The requested revision is not the current revision of the group"),
     )
 )]
 #[put("/v3/group/sbom/{id}")]
+#[allow(clippy::too_many_arguments)]
 /// Update an SBOM group
+///
+/// When the group is addressed by its external ID (`ext:<external id>`) and does not yet exist,
+/// it will be created.
 async fn update(
+    req: HttpRequest,
     service: web::Data<SbomGroupService>,
     db: web::Data<db::ReadWrite>,
     id: web::Path<String>,
-    web::Json(group): web::Json<GroupRequest>,
+    web::Json(mut group): web::Json<GroupRequest>,
     web::Header(if_match): web::Header<IfMatch>,
+    user: UserInformation,
+    authorizer: web::Data<Authorizer>,
     _: Require<UpdateSbomGroup>,
 ) -> Result<impl Responder, Error> {
     let revision = extract_revision(&if_match);
+    let id = id.into_inner();
+
+    if let Some(external_id) = id.strip_prefix(EXTERNAL_ID_PREFIX) {
+        // addressing by external ID implies the external ID of the group
+        match &group.external_id {
+            Some(requested) if requested != external_id => {
+                return Err(Error::bad_request(
+                    "External ID mismatch",
+                    Some("The external ID of the request must match the one of the path"),
+                ));
+            }
+            _ => group.external_id = Some(external_id.to_string()),
+        }
+    }
 
     let tx = db.begin().await?;
-    service.update(&id, revision, group, &tx).await?;
+
+    let Some(resolved) = service.resolve_key(&id, &tx).await? else {
+        // external ID, which doesn't exist yet: create it
+        if revision.is_some() {
+            return Err(Error::RevisionNotFound);
+        }
+        authorizer.require(&user, Permission::CreateSbomGroup)?;
+
+        let Revisioned {
+            revision,
+            value: new_id,
+        } = service.create(group, &tx).await?;
+        tx.commit().await?;
+
+        let location = req
+            .path()
+            .strip_suffix(&id)
+            .map(|base| format!("{base}{new_id}"))
+            .unwrap_or_else(|| req.path().to_string());
+
+        return Ok(HttpResponse::Created()
+            .append_header((header::LOCATION, location))
+            .append_header((header::ETAG, ETag(EntityTag::new_strong(revision))))
+            .json(json!({"id": new_id})));
+    };
+
+    service.update(&resolved, revision, group, &tx).await?;
     tx.commit().await?;
 
     Ok(HttpResponse::NoContent().finish())
@@ -205,7 +262,7 @@ async fn update(
     tag = "sbomGroup",
     operation_id = "readSbomGroup",
     params(
-        ("id", Path, description = "The ID of the group to read"),
+        ("id", Path, description = "The ID of the group to read, or `ext:<external id>`"),
     ),
     responses(
         (
@@ -229,7 +286,10 @@ async fn read(
     _: Require<ReadSbomGroup>,
 ) -> actix_web::Result<impl Responder> {
     let tx = db.begin().await?;
-    let group = service.read(&id, &tx).await?;
+    let group = match service.resolve_key(&id, &tx).await? {
+        Some(id) => service.read(&id, &tx).await?,
+        None => None,
+    };
 
     Ok(match group {
         Some(Revisioned { value, revision }) => HttpResponse::Ok()
