@@ -3,6 +3,7 @@ use crate::{
     audit::{self, Actor, Change},
     binding::model::{Binding, BindingRequest, PrincipalRef, Role},
     email::normalize_email,
+    group::resolve_group,
     user::service::UserService,
 };
 use sea_orm::{
@@ -14,10 +15,7 @@ use std::{
     collections::{BTreeMap, HashMap},
     slice,
 };
-use trustify_common::{
-    model::Revisioned,
-    resource_key::{ResourceKey, ResourceKeyError},
-};
+use trustify_common::{model::Revisioned, resource_key::ResourceKey};
 use trustify_entity::{principal_user, role_binding, sbom_group, team};
 use uuid::Uuid;
 
@@ -63,30 +61,12 @@ impl BindingService {
         Self
     }
 
-    /// Resolve a group key into the group's ID.
-    pub async fn resolve_group(
-        &self,
-        key: &str,
-        db: &impl ConnectionTrait,
-    ) -> Result<Option<Uuid>, Error> {
-        let select = sbom_group::Entity::find();
-        let select = match key.parse::<ResourceKey>() {
-            Ok(ResourceKey::Id(id)) => select.filter(sbom_group::Column::Id.eq(id)),
-            Ok(ResourceKey::External(id)) => select.filter(sbom_group::Column::ExternalId.eq(id)),
-            // unknown IDs don't exist
-            Err(ResourceKeyError::Invalid(_)) => return Ok(None),
-            Err(err) => return Err(err.into()),
-        };
-
-        Ok(select.one(db).await?.map(|group| group.id))
-    }
-
     async fn resolve_group_or_fail(
         &self,
         key: &str,
         db: &impl ConnectionTrait,
     ) -> Result<Uuid, Error> {
-        self.resolve_group(key, db)
+        resolve_group(key, db)
             .await?
             .ok_or_else(|| Error::NotFound(format!("group '{key}'")))
     }
@@ -97,7 +77,7 @@ impl BindingService {
         group: &str,
         db: &impl ConnectionTrait,
     ) -> Result<Option<Revisioned<Vec<Binding>>>, Error> {
-        let Some(group) = self.resolve_group(group, db).await? else {
+        let Some(group) = resolve_group(group, db).await? else {
             return Ok(None);
         };
 
@@ -247,7 +227,7 @@ impl BindingService {
         actor: &Actor,
         db: &impl ConnectionTrait,
     ) -> Result<bool, Error> {
-        let Some(group) = self.resolve_group(group, db).await? else {
+        let Some(group) = resolve_group(group, db).await? else {
             return Ok(false);
         };
 

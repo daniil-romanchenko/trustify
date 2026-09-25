@@ -13,6 +13,7 @@ fn details(subject: &str, email: Option<&str>) -> UserDetails {
         permissions: vec!["read.sbom".into()],
         issuer: Some("https://sso.example.com/realms/acme".into()),
         email: email.map(ToString::to_string),
+        api_key: None,
     }
 }
 

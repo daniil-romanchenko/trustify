@@ -31,6 +31,7 @@ pub async fn create_openapi() -> anyhow::Result<utoipa::openapi::OpenApi> {
                     read_only: false,
                     ei_service,
                     graph: Graph::new(),
+                    tenancy: None,
                 },
             );
         })

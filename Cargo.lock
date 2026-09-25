@@ -8837,13 +8837,17 @@ dependencies = [
 
 [[package]]
 name = "trustify-module-tenancy"
-version = "0.6.0-rc.1"
+version = "0.6.2"
 dependencies = [
  "actix-http",
  "actix-web",
  "anyhow",
+ "async-trait",
+ "clap",
+ "humantime",
  "log",
  "moka",
+ "ring",
  "rstest",
  "sea-orm",
  "sea-query",
@@ -8851,7 +8855,7 @@ dependencies = [
  "serde_json",
  "test-context",
  "test-log",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "time",
  "tokio",
  "trustify-auth",

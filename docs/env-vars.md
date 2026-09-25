@@ -41,6 +41,8 @@
 | `OPENAI_API_KEY`                         | OpenAI access key                                                                   |                                         |
 | `OPENAI_API_BASE`                        | To set the base URL path for API requests                                           | `https://api.openapi.com/v1`            |
 | `OPENAI_MODEL`                           | OpenAI model                                                                        | `gpt-4o`                                |
+| `TRUSTD_API_KEY_MAX_TTL`                 | Maximum lifetime of an API key (humantime)                                          | `365d`                                  |
+| `TRUSTD_API_KEY_PEPPER`                  | Secret (at least 32 characters) for deriving API key hashes; unset disables API keys |                                         |
 | `TRUSTD_DEVMODE_ADDITIONAL_CLIENTS`      | Additional allowed development OAuth clients                                        |                                         |
 | `TRUSTD_DB_HOST`                         | Database address                                                                    | `localhost`                             |
 | `TRUSTD_DB_MAX_CONN`                     | Database max connections                                                            | `75`                                    |
@@ -55,6 +57,7 @@
 | `TRUSTD_DB_USER`                         | Database username                                                                   | `postgres`                              |
 | `TRUSTD_DB_IAM_AUTH`                     | Authenticate with an AWS RDS/Aurora IAM token instead of a password                 | `false`                                 |
 | `TRUSTD_DB_IAM_REGION`                   | AWS region of the RDS/Aurora instance (required when `TRUSTD_DB_IAM_AUTH=true`)     |                                         |
+| `TRUSTD_NO_JUST_IN_TIME_USERS`           | Don't create tenancy users on their first sign-in                                   | `false`                                 |
 | `TRUSTD_PAGINATION_TOTAL_CACHE_TTL`      | TTL for cached pagination total counts (humantime)                                  | `60s`                                   |
 | `TRUSTD_ISSUER_URL`                      | Issuer URL for `--devmode`                                                          | `http://localhost:8090/realms/trustify` |
 | `TRUSTD_MAX_CACHE_SIZE`                  | Maximum size of the graph cache.                                                    | `200 MiB`                               |
