@@ -371,6 +371,8 @@ fn into_actual(
                     name: item.name.to_string(),
                     description: item.description.map(ToString::to_string),
                     labels: item.labels.into(),
+                    kind: None,
+                    external_id: None,
                 },
                 number_of_groups: item.total_groups,
                 number_of_sboms: item.total_sboms,

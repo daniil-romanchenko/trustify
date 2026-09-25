@@ -122,6 +122,13 @@ permission! {
         CreateExploitIntelligence,
         #[strum(serialize = "read.exploitIntelligence")]
         ReadExploitIntelligence,
+
+        /// Manage users, teams, role bindings, and API keys, across all groups.
+        ///
+        /// This permission is intended for an orchestration platform, and is not part of the
+        /// default scope mappings.
+        #[strum(serialize = "manage.tenancy")]
+        ManageTenancy,
     }
 }
 
