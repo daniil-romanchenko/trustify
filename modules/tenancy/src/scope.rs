@@ -58,6 +58,11 @@ pub fn permissions(role: Role) -> &'static [Permission] {
     }
 }
 
+/// Check if a permission is limited by the access scope, as it is granted through roles.
+pub fn is_scoped_permission(permission: Permission) -> bool {
+    permissions(Role::Admin).contains(&permission)
+}
+
 /// Global permissions which grant access to all SBOMs.
 const UNRESTRICTED: &[Permission] = &[Permission::ReadAllSboms, Permission::ManageTenancy];
 
