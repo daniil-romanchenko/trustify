@@ -5,11 +5,13 @@ use crate::{
     endpoints::{Tenancy, configure},
     principal::resolve_principal,
 };
-use actix_web::middleware::from_fn;
+use actix_web::{middleware::from_fn, web};
 use sea_orm::{ActiveModelTrait, ConnectionTrait, DatabaseBackend, Set, Statement};
+use trustify_auth::authorizer::{Authorizer, AuthorizerConfig};
 use trustify_common::db::{self, pagination_cache::PaginationCache};
 use trustify_entity::{labels::Labels, sbom_group};
 use trustify_test_context::{TrustifyContext, call::CallService};
+use utoipa_actix_web::AppExt;
 use uuid::Uuid;
 
 /// A pepper for tests.
@@ -55,6 +57,24 @@ pub async fn caller_with(
         );
     })
     .await
+}
+
+/// Create a test app, serving the tenancy endpoints, with authorization enabled.
+pub async fn caller_authorized(ctx: &TrustifyContext) -> anyhow::Result<impl CallService + '_> {
+    let db_rw = db::ReadWrite::new(ctx.db.clone());
+    let db_ro = db::ReadOnly::new(ctx.db.clone());
+    let tenancy = tenancy(ctx);
+
+    Ok(actix_web::test::init_service(
+        actix_web::App::new()
+            .into_utoipa_app()
+            .app_data(web::Data::new(Authorizer::new(Some(AuthorizerConfig {}))))
+            .service(utoipa_actix_web::scope("/api").configure(|svc| {
+                configure(svc, db_rw, db_ro, PaginationCache::for_test(), tenancy)
+            }))
+            .into_app(),
+    )
+    .await)
 }
 
 /// Create an SBOM group, returning its ID.

@@ -3,6 +3,7 @@ mod test;
 
 use crate::{
     Error,
+    common::access::visible_sboms,
     product::{
         model::{details::ProductDetails, summary::ProductSummary},
         service::ProductService,
@@ -10,7 +11,10 @@ use crate::{
 };
 use actix_web::{HttpResponse, Responder, delete, get, web};
 use sea_orm::TransactionTrait;
-use trustify_auth::{DeleteMetadata, ReadMetadata, authorizer::Require};
+use trustify_auth::{
+    DeleteMetadata, ReadMetadata,
+    authorizer::{AccessScope, Require},
+};
 use trustify_common::{
     db::{self, pagination_cache::PaginationCache, query::Query},
     model::{Paginated, PaginatedResults},
@@ -50,10 +54,28 @@ pub async fn all(
     db: web::Data<db::ReadOnly>,
     web::Query(search): web::Query<Query>,
     web::Query(paginated): web::Query<Paginated>,
+    scope: AccessScope,
     _: Require<ReadMetadata>,
 ) -> Result<impl Responder, Error> {
     let tx = db.begin().await?;
-    Ok(HttpResponse::Ok().json(state.fetch_products(search, paginated, &tx).await?))
+    let mut result = state.fetch_products(search, paginated, &tx).await?;
+
+    // hide references to inaccessible SBOMs
+    let candidates = result.items.iter().flat_map(|product| {
+        product
+            .versions
+            .iter()
+            .filter_map(|version| version.sbom_id)
+    });
+    if let Some(visible) = visible_sboms(&scope, candidates.collect::<Vec<_>>(), &tx).await? {
+        for version in result.items.iter_mut().flat_map(|p| p.versions.iter_mut()) {
+            if version.sbom_id.is_some_and(|id| !visible.contains(&id)) {
+                version.sbom_id = None;
+            }
+        }
+    }
+
+    Ok(HttpResponse::Ok().json(result))
 }
 
 #[utoipa::path(
@@ -72,11 +94,30 @@ pub async fn get(
     state: web::Data<ProductService>,
     db: web::Data<db::ReadOnly>,
     id: web::Path<Uuid>,
+    scope: AccessScope,
     _: Require<ReadMetadata>,
 ) -> Result<impl Responder, Error> {
     let tx = db.begin().await?;
     let fetched = state.fetch_product(*id, &tx).await?;
-    if let Some(fetched) = fetched {
+    if let Some(mut fetched) = fetched {
+        // hide references to inaccessible SBOMs
+        let candidates = fetched
+            .versions
+            .iter()
+            .filter_map(|version| version.head.sbom_id);
+        if let Some(visible) = visible_sboms(&scope, candidates.collect::<Vec<_>>(), &tx).await? {
+            for version in &mut fetched.versions {
+                if version
+                    .head
+                    .sbom_id
+                    .is_some_and(|id| !visible.contains(&id))
+                {
+                    version.head.sbom_id = None;
+                    version.sbom = None;
+                }
+            }
+        }
+
         Ok(HttpResponse::Ok().json(fetched))
     } else {
         Ok(HttpResponse::NotFound().finish())

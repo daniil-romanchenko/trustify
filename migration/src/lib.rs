@@ -87,6 +87,7 @@ mod m0002391_add_crypto_remediation_updated_at;
 mod m0002400_base_purl_name_index;
 mod m0002500_create_tenancy;
 mod m0002510_create_api_key;
+mod m0002520_authz_revision_triggers;
 
 pub trait MigratorExt: Send {
     fn build_migrations() -> Migrations;
@@ -189,6 +190,7 @@ impl MigratorExt for Migrator {
             .normal(m0002400_base_purl_name_index::Migration)
             .normal(m0002500_create_tenancy::Migration)
             .normal(m0002510_create_api_key::Migration)
+            .normal(m0002520_authz_revision_triggers::Migration)
     }
 }
 

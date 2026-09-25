@@ -9,17 +9,19 @@ use crate::{
         validator::ApiKeyValidator,
     },
     audit::Actor,
+    authz::ManageAccess,
 };
 use actix_web::{
     HttpRequest, HttpResponse, Responder, delete, get, http::header, patch, post, web,
 };
-use sea_orm::TransactionTrait;
-use trustify_auth::{ManageTenancy, authenticator::user::UserInformation, authorizer::Require};
+use sea_orm::{ConnectionTrait, TransactionTrait};
+use trustify_auth::authenticator::user::UserInformation;
 use trustify_common::{
     db,
     model::{Paginated, PaginatedResults},
     resource_key::ResourceKey,
 };
+use uuid::Uuid;
 
 pub fn configure(config: &mut utoipa_actix_web::service_config::ServiceConfig) {
     config
@@ -54,9 +56,12 @@ async fn create(
     db: web::Data<db::ReadWrite>,
     user: UserInformation,
     web::Json(request): web::Json<ApiKeyRequest>,
-    _: Require<ManageTenancy>,
+    manage: ManageAccess,
 ) -> Result<impl Responder, Error> {
     let tx = db.begin().await?;
+    for group in &request.groups {
+        manage.require_group(group, &tx).await?;
+    }
     let issued = service.create(request, &Actor::from(&user), &tx).await?;
     tx.commit().await?;
 
@@ -87,9 +92,14 @@ async fn list(
     db: web::Data<db::ReadOnly>,
     web::Query(options): web::Query<ListOptions>,
     web::Query(paginated): web::Query<Paginated>,
-    _: Require<ManageTenancy>,
+    manage: ManageAccess,
 ) -> Result<impl Responder, Error> {
     let tx = db.begin().await?;
+    // delegated admins must list the keys of a group they manage
+    match &options.group {
+        Some(group) => manage.require_group(group, &tx).await?,
+        None => manage.require_global()?,
+    }
     Ok(HttpResponse::Ok().json(service.list(options, paginated, &tx).await?))
 }
 
@@ -113,13 +123,13 @@ async fn read(
     service: web::Data<ApiKeyService>,
     db: web::Data<db::ReadOnly>,
     key: web::Path<String>,
-    _: Require<ManageTenancy>,
+    manage: ManageAccess,
 ) -> Result<impl Responder, Error> {
     let key: ResourceKey = key.parse()?;
     let tx = db.begin().await?;
     Ok(match service.read(&key, &tx).await? {
-        Some(key) => HttpResponse::Ok().json(key),
-        None => HttpResponse::NotFound().finish(),
+        Some(key) if require_key(&manage, &key).is_ok() => HttpResponse::Ok().json(key),
+        _ => HttpResponse::NotFound().finish(),
     })
 }
 
@@ -147,10 +157,11 @@ async fn update(
     key: web::Path<String>,
     user: UserInformation,
     web::Json(patch): web::Json<ApiKeyPatch>,
-    _: Require<ManageTenancy>,
+    manage: ManageAccess,
 ) -> Result<impl Responder, Error> {
     let key: ResourceKey = key.parse()?;
     let tx = db.begin().await?;
+    require_existing_key(&service, &manage, &key, &tx).await?;
     let result = service.patch(&key, patch, &Actor::from(&user), &tx).await?;
     tx.commit().await?;
     validator.invalidate();
@@ -188,10 +199,11 @@ async fn rotate(
     key: web::Path<String>,
     user: UserInformation,
     web::Json(request): web::Json<RotateRequest>,
-    _: Require<ManageTenancy>,
+    manage: ManageAccess,
 ) -> Result<impl Responder, Error> {
     let key: ResourceKey = key.parse()?;
     let tx = db.begin().await?;
+    require_existing_key(&service, &manage, &key, &tx).await?;
     let issued = service
         .rotate(&key, request, &Actor::from(&user), &tx)
         .await?;
@@ -232,13 +244,48 @@ async fn revoke(
     db: web::Data<db::ReadWrite>,
     key: web::Path<String>,
     user: UserInformation,
-    _: Require<ManageTenancy>,
+    manage: ManageAccess,
 ) -> Result<impl Responder, Error> {
     let key: ResourceKey = key.parse()?;
     let tx = db.begin().await?;
-    service.revoke(&key, &Actor::from(&user), &tx).await?;
+    // an unknown, or unmanaged, key is handled like one which doesn't exist
+    match service.read(&key, &tx).await? {
+        Some(existing) if require_key(&manage, &existing).is_ok() => {
+            service.revoke(&key, &Actor::from(&user), &tx).await?;
+        }
+        _ => return Ok(HttpResponse::NoContent().finish()),
+    }
     tx.commit().await?;
     validator.invalidate();
 
     Ok(HttpResponse::NoContent().finish())
+}
+
+/// Ensure the caller may manage all groups of a key.
+fn require_key(manage: &ManageAccess, key: &ApiKey) -> Result<(), Error> {
+    if manage.is_global() {
+        return Ok(());
+    }
+
+    let groups = key
+        .groups
+        .iter()
+        .filter_map(|group| Uuid::parse_str(group).ok())
+        .collect::<Vec<_>>();
+    manage.require_groups(&groups)
+}
+
+/// Ensure a key exists, and the caller may manage all of its groups.
+///
+/// For delegated access, a key which isn't managed is reported as not found.
+async fn require_existing_key(
+    service: &ApiKeyService,
+    manage: &ManageAccess,
+    key: &ResourceKey,
+    db: &impl ConnectionTrait,
+) -> Result<(), Error> {
+    match service.read(key, db).await? {
+        Some(existing) if require_key(manage, &existing).is_ok() => Ok(()),
+        _ => Err(Error::NotFound(format!("API key '{key}'"))),
+    }
 }

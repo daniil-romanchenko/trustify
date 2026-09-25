@@ -43,6 +43,7 @@
 | `OPENAI_MODEL`                           | OpenAI model                                                                        | `gpt-4o`                                |
 | `TRUSTD_API_KEY_MAX_TTL`                 | Maximum lifetime of an API key (humantime)                                          | `365d`                                  |
 | `TRUSTD_API_KEY_PEPPER`                  | Secret (at least 32 characters) for deriving API key hashes; unset disables API keys |                                         |
+| `TRUSTD_AUTHZ_MODE`                      | Authorization of SBOM access: `global` (permissions only) or `scoped` (role bindings) | `global`                                |
 | `TRUSTD_DEVMODE_ADDITIONAL_CLIENTS`      | Additional allowed development OAuth clients                                        |                                         |
 | `TRUSTD_DISABLE_FORMATS`                 | Disable these document formats (comma-separated); use `*` to disable all            |                                         |
 | `TRUSTD_DISABLE_IMPORTERS`               | Disable these importer types (comma-separated); use `*` to disable all              |                                         |

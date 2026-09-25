@@ -17,9 +17,8 @@ safely.
 
 Every change is recorded in the `audit_event` table.
 
-> [!NOTE]
-> Role bindings are stored, but not yet enforced. Access to SBOMs is still granted by the global
-> permissions only. API key scopes are enforced.
+Role bindings are only enforced when scoped authorization is enabled (see below). API key scopes
+are always enforced.
 
 ## Signing in
 
@@ -122,3 +121,37 @@ http DELETE localhost:8080/api/v3/api-key/ext:checkout.ci
 Tokens have the form `tfy_<key id>_<secret>_<checksum>`. The key ID is public, and shown in logs and
 the API. Revocations take effect immediately on the same instance, and within 60 seconds on others.
 The maximum lifetime of a key is configured using `TRUSTD_API_KEY_MAX_TTL` (default: `365d`).
+
+## Scoped authorization
+
+By default (`TRUSTD_AUTHZ_MODE=global`), access to SBOMs is granted by the global permissions of the
+access token only, and role bindings are not enforced. With `TRUSTD_AUTHZ_MODE=scoped`, a user can
+only access SBOMs assigned to groups it holds a role on:
+
+| Role       | Grants, on the group and all its descendants                                   |
+|------------|--------------------------------------------------------------------------------|
+| `viewer`   | Read SBOMs and groups                                                          |
+| `uploader` | `viewer`, and upload SBOMs into the groups                                     |
+| `editor`   | `uploader`, and update or delete SBOMs, and change their group assignments      |
+| `admin`    | `editor`, and create, update, or delete groups, and manage bindings and API keys |
+
+The global permissions still apply: a user needs e.g. `read.sbom` to read SBOMs at all. The role
+bindings limit which SBOMs.
+
+* SBOMs of other groups are handled as if they didn't exist (`404`, or omitted from lists).
+* Vulnerabilities, advisories, and packages stay visible to everyone, but references to
+  inaccessible SBOMs are removed. Graph queries (`/v3/analysis`) stop at the boundary of accessible
+  SBOMs.
+* Uploads require a `group` parameter, naming groups the user may upload into.
+* Replacing the group assignments of an SBOM keeps assignments to groups outside the user's scope.
+* New top-level groups can only be created with unrestricted access.
+* The `read.allSboms` and `manage.tenancy` permissions grant unrestricted access, e.g. for platform
+  operators.
+* Changes to roles, memberships, users, and the group hierarchy take effect within about one
+  second on all instances.
+
+### Delegated administration
+
+With scoped authorization, a group `admin` may manage the role bindings and API keys of its groups,
+without the `manage.tenancy` permission. Keys can only be listed by passing a `group` it manages.
+Users and teams can only be managed with the `manage.tenancy` permission.

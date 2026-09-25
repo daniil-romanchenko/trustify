@@ -138,6 +138,11 @@ permission! {
         /// default scope mappings.
         #[strum(serialize = "manage.tenancy")]
         ManageTenancy,
+
+        /// Read all SBOMs, regardless of the groups they are assigned to, when scoped
+        /// authorization is enabled.
+        #[strum(serialize = "read.allSboms")]
+        ReadAllSboms,
     }
 }
 

@@ -2,6 +2,7 @@ mod cache_eviction;
 mod external_depth;
 mod query;
 mod recursive;
+mod scope;
 mod warnings;
 
 use super::*;

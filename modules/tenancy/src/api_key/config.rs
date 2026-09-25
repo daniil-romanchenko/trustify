@@ -1,3 +1,4 @@
+use crate::scope::AuthzMode;
 use std::time::Duration;
 
 /// Minimum length of the API key pepper.
@@ -25,6 +26,11 @@ pub struct TenancyConfig {
     /// Don't create users on their first sign-in. Only users provisioned upfront get linked.
     #[arg(long, env = "TRUSTD_NO_JUST_IN_TIME_USERS", default_value_t = false)]
     pub no_just_in_time_users: bool,
+
+    /// How access to SBOMs is authorized: only using global permissions, or scoped to the
+    /// SBOM groups a user holds a role on.
+    #[arg(long, env = "TRUSTD_AUTHZ_MODE", value_enum, default_value_t = AuthzMode::Global)]
+    pub authz_mode: AuthzMode,
 }
 
 impl Default for TenancyConfig {
@@ -33,6 +39,7 @@ impl Default for TenancyConfig {
             api_key_pepper: None,
             api_key_max_ttl: Duration::from_secs(365 * 24 * 60 * 60).into(),
             no_just_in_time_users: false,
+            authz_mode: AuthzMode::Global,
         }
     }
 }

@@ -6,7 +6,11 @@ mod test;
 
 pub use sign_in::{Identity, SignIn, find_linked, sign_in};
 
-use crate::{Error, user::model::UserState};
+use crate::{
+    Error,
+    scope::{AuthzMode, api_key_scope, current_revision, is_unrestricted, user_scope},
+    user::model::UserState,
+};
 use actix_web::{
     Error as ActixError, FromRequest, HttpMessage, HttpRequest, HttpResponse,
     body::{BoxBody, MessageBody},
@@ -21,12 +25,14 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use trustify_auth::authenticator::user::UserInformation;
+use trustify_auth::{authenticator::user::UserInformation, authorizer::AccessScope};
 use trustify_common::{db, error::ErrorInformation};
 use uuid::Uuid;
 
-/// Time an identity stays resolved, before it is looked up again.
+/// Time an identity, or scope, stays cached at most.
 const CACHE_TTL: Duration = Duration::from_secs(30);
+/// Time the authorization revision is cached, the maximum delay for changes to take effect.
+const REVISION_TTL: Duration = Duration::from_secs(1);
 const CACHE_CAPACITY: u64 = 10_000;
 
 /// The user, an authenticated request is made by.
@@ -74,20 +80,33 @@ impl From<SignIn> for Resolved {
     }
 }
 
-/// Resolves authenticated identities to users.
+/// Resolves authenticated identities to users, and computes their access scope.
+///
+/// Cached information is keyed by the authorization revision, which is bumped by the database
+/// whenever something relevant for authorization changes. So changes take effect on all instances
+/// within [`REVISION_TTL`].
 #[derive(Clone)]
 pub struct PrincipalResolver {
     db: db::ReadWrite,
     just_in_time: bool,
-    cache: Cache<Identity, Resolved>,
+    mode: AuthzMode,
+    revision: Cache<(), i64>,
+    principals: Cache<(Identity, i64), Resolved>,
+    scopes: Cache<(Uuid, i64), AccessScope>,
 }
 
 impl PrincipalResolver {
-    pub fn new(db: db::ReadWrite, just_in_time: bool) -> Self {
+    pub fn new(db: db::ReadWrite, just_in_time: bool, mode: AuthzMode) -> Self {
         Self {
             db,
             just_in_time,
-            cache: Cache::builder()
+            mode,
+            revision: Cache::builder().time_to_live(REVISION_TTL).build(),
+            principals: Cache::builder()
+                .max_capacity(CACHE_CAPACITY)
+                .time_to_live(CACHE_TTL)
+                .build(),
+            scopes: Cache::builder()
                 .max_capacity(CACHE_CAPACITY)
                 .time_to_live(CACHE_TTL)
                 .build(),
@@ -96,12 +115,21 @@ impl PrincipalResolver {
 
     /// Drop all cached information, e.g. after users have been changed.
     pub fn invalidate(&self) {
-        self.cache.invalidate_all();
+        self.revision.invalidate_all();
+        self.principals.invalidate_all();
+        self.scopes.invalidate_all();
+    }
+
+    async fn revision(&self) -> Result<i64, Arc<Error>> {
+        self.revision
+            .try_get_with((), current_revision(&self.db))
+            .await
     }
 
     async fn resolve(&self, identity: Identity) -> Result<Resolved, Arc<Error>> {
-        self.cache
-            .try_get_with(identity.clone(), self.lookup(identity))
+        let revision = self.revision().await?;
+        self.principals
+            .try_get_with((identity.clone(), revision), self.lookup(identity))
             .await
     }
 
@@ -126,6 +154,45 @@ impl PrincipalResolver {
 
         Err(Error::Conflict("Unable to link identity".into()))
     }
+
+    /// Compute the access scope of a request.
+    ///
+    /// Returns `None` when scoped authorization is disabled.
+    async fn access_scope(
+        &self,
+        user: Option<&UserInformation>,
+        principal: Option<&Principal>,
+    ) -> Result<Option<AccessScope>, Arc<Error>> {
+        if self.mode == AuthzMode::Global {
+            return Ok(None);
+        }
+
+        let details = match user {
+            // only possible with authentication disabled
+            None | Some(UserInformation::Anonymous) => return Ok(Some(AccessScope::Unrestricted)),
+            Some(UserInformation::Authenticated(details)) => details,
+        };
+
+        if let Some(api_key) = &details.api_key {
+            return Ok(Some(api_key_scope(&api_key.groups)));
+        }
+
+        if is_unrestricted(details) {
+            return Ok(Some(AccessScope::Unrestricted));
+        }
+
+        let Some(principal) = principal else {
+            return Ok(Some(AccessScope::none()));
+        };
+
+        let revision = self.revision().await?;
+        let scope = self
+            .scopes
+            .try_get_with((principal.id, revision), user_scope(principal.id, &self.db))
+            .await?;
+
+        Ok(Some(scope))
+    }
 }
 
 /// Operations which may be performed using an API key, as method and path suffix.
@@ -144,7 +211,7 @@ fn api_key_allowed(req: &ServiceRequest) -> bool {
             .any(|(method, path)| req.method() == method && req.path().ends_with(path))
 }
 
-/// Middleware resolving the [`Principal`] of an authenticated request.
+/// Middleware resolving the [`Principal`] and the [`AccessScope`] of a request.
 ///
 /// This must run after the authentication middleware. Requests by a disabled user will be
 /// rejected with `401`. Requests using an API key are rejected with `403`, unless they perform an
@@ -193,6 +260,26 @@ pub async fn resolve_principal(
                 ));
                 return Ok(req.into_response(response).map_into_boxed_body());
             }
+        }
+    }
+
+    let user = req.extensions().get::<UserInformation>().cloned();
+    let principal = req.extensions().get::<Principal>().cloned();
+    match resolver
+        .access_scope(user.as_ref(), principal.as_ref())
+        .await
+    {
+        Ok(Some(scope)) => {
+            req.extensions_mut().insert(scope);
+        }
+        Ok(None) => {}
+        Err(err) => {
+            log::warn!("Failed to compute the access scope: {err}");
+            let response = HttpResponse::ServiceUnavailable().json(ErrorInformation::new(
+                "Unavailable",
+                "Unable to authorize the request",
+            ));
+            return Ok(req.into_response(response).map_into_boxed_body());
         }
     }
 

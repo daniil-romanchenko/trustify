@@ -3,6 +3,7 @@ use crate::{
     Error,
     common::{
         LicenseInfo,
+        access::sboms_in_groups,
         license_filtering::{LICENSE, license_text_coalesce},
     },
     purl::model::summary::purl::PurlSummary,
@@ -51,6 +52,7 @@ pub struct FetchOptions {
     labels: Labels,
     groups: Option<Vec<Uuid>>,
     crypto: Option<Vec<String>>,
+    visible: Option<Vec<Uuid>>,
     pub advisories: bool,
 }
 
@@ -72,6 +74,14 @@ impl FetchOptions {
 
     pub fn crypto(mut self, names: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.crypto = Some(names.into_iter().map(|s| s.into()).collect());
+        self
+    }
+
+    /// Only return SBOMs assigned to one of these groups, `None` for no restriction.
+    ///
+    /// Unlike [`Self::groups`], this is used for enforcing access, not for filtering.
+    pub fn visible(mut self, groups: Option<Vec<Uuid>>) -> Self {
+        self.visible = groups;
         self
     }
 
@@ -256,6 +266,10 @@ impl SbomService {
                         .into_query(),
                 ),
             );
+        }
+
+        if let Some(visible) = options.visible {
+            query = query.filter(sbom::Column::SbomId.in_subquery(sboms_in_groups(visible)));
         }
 
         // Add license filtering if license query is present
@@ -473,6 +487,7 @@ impl SbomService {
         search: Query,
         paginated: impl Pagination,
         include_counts: bool,
+        visible: Option<Vec<Uuid>>,
         connection: &C,
     ) -> Result<PaginatedResults<SbomModel>, Error> {
         let mut query = join_purls_and_cpes(
@@ -502,6 +517,10 @@ impl SbomService {
         if let Some(id) = sbom_id {
             query = query.filter(sbom_ai::Column::SbomId.eq(id));
         }
+        if let Some(visible) = &visible {
+            query =
+                query.filter(sbom_ai::Column::SbomId.in_subquery(sboms_in_groups(visible.clone())));
+        }
 
         let limiter =
             limit_selector::<_, _, _, ModelCatcher>(connection, query, paginated, &self.cache)?;
@@ -529,11 +548,17 @@ impl SbomService {
         let counts_by_uuid: HashMap<Uuid, i64> = if all_purl_uuids.is_empty() || !include_counts {
             HashMap::new()
         } else {
-            sbom_node_purl_ref::Entity::find()
+            let mut counts = sbom_node_purl_ref::Entity::find()
                 .select_only()
                 .column(sbom_node_purl_ref::Column::QualifiedPurlId)
                 .column_as(sbom_node_purl_ref::Column::SbomId.count(), "count")
-                .filter(sbom_node_purl_ref::Column::QualifiedPurlId.is_in(all_purl_uuids))
+                .filter(sbom_node_purl_ref::Column::QualifiedPurlId.is_in(all_purl_uuids));
+            if let Some(visible) = visible {
+                counts = counts.filter(
+                    sbom_node_purl_ref::Column::SbomId.in_subquery(sboms_in_groups(visible)),
+                );
+            }
+            counts
                 .group_by(sbom_node_purl_ref::Column::QualifiedPurlId)
                 .into_tuple::<(Uuid, i64)>()
                 .all(connection)
@@ -893,8 +918,16 @@ impl SbomService {
     pub async fn count_related_sboms<C: ConnectionTrait>(
         &self,
         references: Vec<SbomExternalPackageReference<'_>>,
+        visible: Option<Vec<Uuid>>,
         connection: &C,
     ) -> Result<Vec<i64>, Error> {
+        let visible = |select: Select<sbom::Entity>| match &visible {
+            Some(groups) => {
+                select.filter(sbom::Column::SbomId.in_subquery(sboms_in_groups(groups.clone())))
+            }
+            None => select,
+        };
+
         #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
         enum Id {
             Cpe(Uuid),
@@ -920,7 +953,7 @@ impl SbomService {
             .collect::<Vec<_>>();
 
         counts_map.extend(
-            sbom::Entity::find()
+            visible(sbom::Entity::find())
                 .join(JoinType::Join, sbom::Relation::Node.def())
                 .join(JoinType::Join, sbom_node::Relation::Cpe.def())
                 .filter(sbom_node_cpe_ref::Column::CpeId.is_in(cpes))
@@ -944,7 +977,7 @@ impl SbomService {
             .collect::<Vec<_>>();
 
         counts_map.extend(
-            sbom::Entity::find()
+            visible(sbom::Entity::find())
                 .join(JoinType::Join, sbom::Relation::Node.def())
                 .join(JoinType::Join, sbom_node::Relation::Purl.def())
                 .filter(sbom_node_purl_ref::Column::QualifiedPurlId.is_in(purls))
@@ -977,9 +1010,13 @@ impl SbomService {
         package_ref: SbomExternalPackageReference<'_>,
         paginated: impl Pagination,
         query: Query,
+        visible: Option<Vec<Uuid>>,
         connection: &C,
     ) -> Result<PaginatedResults<SbomSummary>, Error> {
-        let select = sbom::Entity::find().join(JoinType::Join, sbom::Relation::Node.def());
+        let mut select = sbom::Entity::find().join(JoinType::Join, sbom::Relation::Node.def());
+        if let Some(visible) = visible {
+            select = select.filter(sbom::Column::SbomId.in_subquery(sboms_in_groups(visible)));
+        }
 
         let select = match package_ref {
             SbomExternalPackageReference::Purl(purl) => select

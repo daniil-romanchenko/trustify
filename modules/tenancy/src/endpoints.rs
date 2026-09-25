@@ -25,6 +25,7 @@ impl Tenancy {
             resolver: Arc::new(PrincipalResolver::new(
                 db_rw.clone(),
                 !config.no_just_in_time_users,
+                config.authz_mode,
             )),
             api_key_validator: Arc::new(ApiKeyValidator::new(api_keys.clone(), db_rw)),
             api_keys,
