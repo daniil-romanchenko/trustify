@@ -84,6 +84,7 @@ mod m0002370_importer_quay_auth;
 mod m0002380_version_function_parallelism;
 mod m0002390_create_tenancy;
 mod m0002400_create_api_key;
+mod m0002410_authz_revision_triggers;
 
 pub trait MigratorExt: Send {
     fn build_migrations() -> Migrations;
@@ -181,6 +182,7 @@ impl MigratorExt for Migrator {
             .normal(m0002380_version_function_parallelism::Migration)
             .normal(m0002390_create_tenancy::Migration)
             .normal(m0002400_create_api_key::Migration)
+            .normal(m0002410_authz_revision_triggers::Migration)
     }
 }
 

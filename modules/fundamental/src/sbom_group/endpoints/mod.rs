@@ -5,28 +5,33 @@ use super::{
     model::*,
     service::{ListOptions, SbomGroupService},
 };
-use crate::Error;
+use crate::{
+    Error,
+    common::access::{require_group, require_sbom, require_unrestricted},
+};
 use actix_web::{
     HttpRequest, HttpResponse, Responder, delete, get,
     http::header::{self, ETag, EntityTag, IfMatch},
     patch, post, put, web,
 };
-use sea_orm::TransactionTrait;
+use sea_orm::{ConnectionTrait, TransactionTrait};
 use serde::Serialize;
 use serde_json::json;
 use trustify_auth::{
     CreateSbomGroup, DeleteSbomGroup, Permission, ReadSbom, ReadSbomGroup, UpdateSbom,
     UpdateSbomGroup,
     authenticator::user::UserInformation,
-    authorizer::{Authorizer, Require},
+    authorizer::{AccessScope, Authorizer, Require},
 };
 use trustify_common::{
     db::{self, pagination_cache::PaginationCache, query::Query},
     endpoints::extract_revision,
+    id::Id,
     model::{Paginated, Revisioned},
     resource_key::EXTERNAL_ID_PREFIX,
 };
 use utoipa::ToSchema;
+use uuid::Uuid;
 
 pub fn configure(
     config: &mut utoipa_actix_web::service_config::ServiceConfig,
@@ -78,10 +83,14 @@ async fn list(
     web::Query(pagination): web::Query<Paginated>,
     web::Query(options): web::Query<ListOptions>,
     web::Query(query): web::Query<Query>,
+    scope: AccessScope,
     _: Require<ReadSbomGroup>,
 ) -> actix_web::Result<impl Responder> {
     let tx = db.begin().await?;
-    let result = service.list(options, pagination, query, &tx).await?;
+    let visible = scope.groups_with(Permission::ReadSbomGroup);
+    let result = service
+        .list(options, pagination, query, visible, &tx)
+        .await?;
 
     Ok(HttpResponse::Ok().json(result))
 }
@@ -117,9 +126,11 @@ async fn create(
     service: web::Data<SbomGroupService>,
     db: web::Data<db::ReadWrite>,
     web::Json(group): web::Json<GroupRequest>,
+    scope: AccessScope,
     _: Require<CreateSbomGroup>,
 ) -> Result<impl Responder, Error> {
     let tx = db.begin().await?;
+    require_parent(&scope, &service, group.parent.as_deref(), &tx).await?;
     let Revisioned {
         revision,
         value: id,
@@ -156,6 +167,7 @@ async fn delete(
     db: web::Data<db::ReadWrite>,
     id: web::Path<String>,
     web::Header(if_match): web::Header<IfMatch>,
+    scope: AccessScope,
     _: Require<DeleteSbomGroup>,
 ) -> Result<impl Responder, Error> {
     let revision = extract_revision(&if_match);
@@ -166,6 +178,10 @@ async fn delete(
         .resolve_key(&id, &tx)
         .await?
         .unwrap_or(id.into_inner());
+    // an inaccessible group is handled like one which doesn't exist
+    if require_group(&scope, Permission::DeleteSbomGroup, &id).is_err() {
+        return Ok(HttpResponse::NoContent().finish());
+    }
     service.delete(&id, revision, &tx).await?;
     tx.commit().await?;
 
@@ -207,6 +223,7 @@ async fn update(
     web::Header(if_match): web::Header<IfMatch>,
     user: UserInformation,
     authorizer: web::Data<Authorizer>,
+    scope: AccessScope,
     _: Require<UpdateSbomGroup>,
 ) -> Result<impl Responder, Error> {
     let revision = extract_revision(&if_match);
@@ -233,6 +250,7 @@ async fn update(
             return Err(Error::RevisionNotFound);
         }
         authorizer.require(&user, Permission::CreateSbomGroup)?;
+        require_parent(&scope, &service, group.parent.as_deref(), &tx).await?;
 
         let Revisioned {
             revision,
@@ -252,6 +270,13 @@ async fn update(
             .json(json!({"id": new_id})));
     };
 
+    require_group(&scope, Permission::UpdateSbomGroup, &resolved)?;
+    // moving a group requires the permission to create groups in the new parent
+    if let Some(current) = service.read(&resolved, &tx).await?
+        && current.value.parent != group.parent
+    {
+        require_parent(&scope, &service, group.parent.as_deref(), &tx).await?;
+    }
     service.update(&resolved, revision, group, &tx).await?;
     tx.commit().await?;
 
@@ -283,12 +308,15 @@ async fn read(
     service: web::Data<SbomGroupService>,
     db: web::Data<db::ReadOnly>,
     id: web::Path<String>,
+    scope: AccessScope,
     _: Require<ReadSbomGroup>,
 ) -> actix_web::Result<impl Responder> {
     let tx = db.begin().await?;
     let group = match service.resolve_key(&id, &tx).await? {
-        Some(id) => service.read(&id, &tx).await?,
-        None => None,
+        Some(id) if require_group(&scope, Permission::ReadSbomGroup, &id).is_ok() => {
+            service.read(&id, &tx).await?
+        }
+        _ => None,
     };
 
     Ok(match group {
@@ -319,10 +347,17 @@ async fn read_assignments(
     service: web::Data<SbomGroupService>,
     db: web::Data<db::ReadOnly>,
     id: web::Path<String>,
+    scope: AccessScope,
     _: Require<ReadSbom>,
 ) -> actix_web::Result<impl Responder> {
     let tx = db.begin().await?;
-    let assignments = service.read_assignments(&id, &tx).await?;
+    let Ok(sbom_id) = Uuid::parse_str(&id) else {
+        return Ok(HttpResponse::NotFound().finish());
+    };
+    require_sbom(&scope, Permission::ReadSbom, &Id::Uuid(sbom_id), &tx).await?;
+    let assignments = service
+        .read_assignments(&id, scope.groups_with(Permission::ReadSbom), &tx)
+        .await?;
 
     Ok(match assignments {
         Some(Revisioned { value, revision }) => HttpResponse::Ok()
@@ -354,13 +389,29 @@ async fn update_assignments(
     service: web::Data<SbomGroupService>,
     db: web::Data<db::ReadWrite>,
     id: web::Path<String>,
-    web::Json(group_ids): web::Json<Vec<String>>,
+    web::Json(mut group_ids): web::Json<Vec<String>>,
     web::Header(if_match): web::Header<IfMatch>,
+    scope: AccessScope,
     _: Require<UpdateSbom>,
 ) -> Result<impl Responder, Error> {
     let revision = extract_revision(&if_match);
 
     let tx = db.begin().await?;
+    if !scope.is_unrestricted() {
+        let sbom_id = Uuid::parse_str(&id).map_err(|_| Error::NotFound(id.to_string()))?;
+        require_sbom(&scope, Permission::UpdateSbom, &Id::Uuid(sbom_id), &tx).await?;
+        require_groups(&scope, &group_ids)?;
+        // keep assignments to groups outside the scope
+        if let Some(Revisioned { value: current, .. }) =
+            service.read_assignments(&id, None, &tx).await?
+        {
+            group_ids.extend(
+                current
+                    .into_iter()
+                    .filter(|group| require_group(&scope, Permission::UpdateSbom, group).is_err()),
+            );
+        }
+    }
     service
         .update_assignments(&id, revision, group_ids, &tx)
         .await?;
@@ -386,12 +437,30 @@ async fn bulk_update_assignments(
     service: web::Data<SbomGroupService>,
     db: web::Data<db::ReadWrite>,
     web::Json(request): web::Json<BulkAssignmentRequest>,
+    scope: AccessScope,
     _: Require<UpdateSbom>,
 ) -> Result<impl Responder, Error> {
     let tx = db.begin().await?;
-    service
-        .bulk_update_assignments(request.sbom_ids, request.group_ids, &tx)
-        .await?;
+    match scope.groups_with(Permission::UpdateSbom) {
+        None => {
+            service
+                .bulk_update_assignments(request.sbom_ids, request.group_ids, &tx)
+                .await?;
+        }
+        Some(editable) => {
+            require_sboms(&scope, &request.sbom_ids, &tx).await?;
+            require_groups(&scope, &request.group_ids)?;
+            // replace only within the scope: remove all other editable groups
+            let remove = editable
+                .iter()
+                .map(ToString::to_string)
+                .filter(|group| !request.group_ids.contains(group))
+                .collect();
+            service
+                .patch_assignments(request.sbom_ids, request.group_ids, remove, &tx)
+                .await?;
+        }
+    }
     tx.commit().await?;
 
     Ok(HttpResponse::NoContent().finish())
@@ -415,13 +484,61 @@ async fn patch_assignments(
     service: web::Data<SbomGroupService>,
     db: web::Data<db::ReadWrite>,
     web::Json(request): web::Json<PatchAssignmentRequest>,
+    scope: AccessScope,
     _: Require<UpdateSbom>,
 ) -> Result<impl Responder, Error> {
     let tx = db.begin().await?;
+    if !scope.is_unrestricted() {
+        require_sboms(&scope, &request.sbom_ids, &tx).await?;
+        require_groups(&scope, &request.add)?;
+        require_groups(&scope, &request.remove)?;
+    }
     service
         .patch_assignments(request.sbom_ids, request.add, request.remove, &tx)
         .await?;
     tx.commit().await?;
 
     Ok(HttpResponse::NoContent().finish())
+}
+
+/// Ensure a new parent group allows creating groups in it, or, for top-level groups, that access
+/// is unrestricted.
+async fn require_parent(
+    scope: &AccessScope,
+    service: &SbomGroupService,
+    parent: Option<&str>,
+    db: &impl ConnectionTrait,
+) -> Result<(), Error> {
+    let Some(parent) = parent else {
+        return require_unrestricted(scope);
+    };
+
+    match service.resolve_key(parent, db).await? {
+        Some(parent) => require_group(scope, Permission::CreateSbomGroup, &parent)
+            .map_err(|_| Error::BadRequest("Parent group not found".into(), None)),
+        // the service will reject the unknown parent
+        None => Ok(()),
+    }
+}
+
+/// Ensure all groups allow updating SBOM assignments.
+fn require_groups(scope: &AccessScope, groups: &[String]) -> Result<(), Error> {
+    for group in groups {
+        require_group(scope, Permission::UpdateSbom, group)
+            .map_err(|_| Error::BadRequest("Group not found".into(), Some(group.clone().into())))?;
+    }
+    Ok(())
+}
+
+/// Ensure all SBOMs, by ID, allow updating them.
+async fn require_sboms(
+    scope: &AccessScope,
+    sbom_ids: &[String],
+    db: &impl ConnectionTrait,
+) -> Result<(), Error> {
+    for sbom_id in sbom_ids {
+        let id = Uuid::parse_str(sbom_id).map_err(|_| Error::NotFound(sbom_id.clone()))?;
+        require_sbom(scope, Permission::UpdateSbom, &Id::Uuid(id), db).await?;
+    }
+    Ok(())
 }

@@ -92,11 +92,15 @@ impl SbomGroupService {
         options: ListOptions,
         paginated: impl Pagination,
         query: Query,
+        visible: Option<Vec<Uuid>>,
         db: &impl ConnectionTrait,
     ) -> Result<GroupListResult, Error> {
         let ListOptions { totals, parents } = options;
 
-        let query = sbom_group::Entity::find().filtering(query)?;
+        let mut query = sbom_group::Entity::find().filtering(query)?;
+        if let Some(visible) = &visible {
+            query = query.filter(sbom_group::Column::Id.is_in(visible.clone()));
+        }
 
         let limiter = query.limiting(db, paginated, &self.cache)?;
 
@@ -116,11 +120,19 @@ impl SbomGroupService {
             (Vec::with_capacity(0), Vec::with_capacity(0))
         };
 
-        let parent_chains = if parents.is_active() {
+        let mut parent_chains = if parents.is_active() {
             self.resolve_parents(&ids, db).await?
         } else {
             Vec::with_capacity(0)
         };
+
+        // don't disclose groups which are not visible, like the ancestors of a visible group
+        if let Some(visible) = &visible {
+            let visible: HashSet<String> = visible.iter().map(ToString::to_string).collect();
+            for chain in &mut parent_chains {
+                chain.retain(|id| visible.contains(id));
+            }
+        }
 
         for (group, number_of_groups, number_of_sboms, parents) in izip!(
             result.items,
@@ -632,6 +644,7 @@ WHERE parent IS NULL
     pub async fn read_assignments(
         &self,
         sbom_id: &str,
+        visible: Option<Vec<Uuid>>,
         db: &impl ConnectionTrait,
     ) -> Result<Option<Revisioned<Vec<String>>>, Error> {
         let sbom_uuid =
@@ -653,6 +666,7 @@ WHERE parent IS NULL
 
         let group_ids = assignments
             .into_iter()
+            .filter(|a| visible.as_ref().is_none_or(|v| v.contains(&a.group_id)))
             .map(|a| a.group_id.to_string())
             .collect();
 

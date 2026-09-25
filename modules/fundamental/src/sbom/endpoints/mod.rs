@@ -10,7 +10,10 @@ use uuid::Uuid;
 
 use crate::{
     Error,
-    common::LicenseRefMapping,
+    common::{
+        LicenseRefMapping,
+        access::{can_access, require_group, require_sbom, visible_groups},
+    },
     license::{
         get_sanitize_filename,
         service::{LicenseService, license_export::LicenseExporter},
@@ -36,7 +39,7 @@ use trustify_auth::{
         error::AuthorizationError,
         user::{UserDetails, UserInformation},
     },
-    authorizer::{Authorizer, Require},
+    authorizer::{AccessScope, Authorizer, Require},
 };
 use trustify_common::{
     db::{self, pagination_cache::PaginationCache, query::Query},
@@ -111,10 +114,12 @@ pub async fn get_unique_licenses(
     fetcher: web::Data<LicenseService>,
     db: web::Data<db::ReadOnly>,
     id: web::Path<String>,
+    scope: AccessScope,
     _: Require<ReadSbom>,
 ) -> Result<impl Responder, Error> {
     let parsed_id = Id::from_str(&id).map_err(Error::IdKey)?;
     let tx = db.begin().await?;
+    require_sbom(&scope, Permission::ReadSbom, &parsed_id, &tx).await?;
     let all_licenses_info = fetcher.get_all_license_info(parsed_id, &tx).await?;
     match all_licenses_info {
         Some(all_licenses) => Ok(HttpResponse::Ok().json(all_licenses)),
@@ -138,9 +143,12 @@ pub async fn get_license_export(
     fetcher: web::Data<LicenseService>,
     db: web::Data<db::ReadOnly>,
     id: web::Path<String>,
+    scope: AccessScope,
+    _: Require<ReadSbom>,
 ) -> Result<impl Responder, Error> {
     let id = Id::from_str(&id).map_err(Error::IdKey)?;
     let tx = db.begin().await?;
+    require_sbom(&scope, Permission::ReadSbom, &id, &tx).await?;
 
     let license_export_result = fetcher.license_export(id, &tx).await?;
     if let Some(name_group_version) = license_export_result.sbom_name_group_version.clone() {
@@ -194,6 +202,7 @@ mod v2 {
         ),
     )]
     #[get("/v2/sbom")]
+    #[allow(clippy::too_many_arguments)]
     #[deprecated = "Use the v3 version of this API"]
     pub async fn all(
         fetch: web::Data<SbomService>,
@@ -203,11 +212,12 @@ mod v2 {
         QsQuery(group_filter): QsQuery<GroupFilterQuery>,
         authorizer: web::Data<Authorizer>,
         user: UserInformation,
+        scope: AccessScope,
     ) -> Result<impl Responder, Error> {
         authorizer.require(&user, Permission::ReadSbom)?;
 
         let tx = db.begin().await?;
-        let mut options = FetchOptions::default();
+        let mut options = FetchOptions::default().visible(visible_groups(&scope));
         if !group_filter.group.is_empty() {
             options = options.groups(group_filter.group);
         }
@@ -256,11 +266,14 @@ mod v3 {
         QsQuery(group_filter): QsQuery<GroupFilterQuery>,
         authorizer: web::Data<Authorizer>,
         user: UserInformation,
+        scope: AccessScope,
     ) -> Result<impl Responder, Error> {
         authorizer.require(&user, Permission::ReadSbom)?;
 
         let tx = db.begin().await?;
-        let mut options = FetchOptions::default().advisories(params.advisories);
+        let mut options = FetchOptions::default()
+            .advisories(params.advisories)
+            .visible(visible_groups(&scope));
         if !group_filter.group.is_empty() {
             options = options.groups(group_filter.group);
         }
@@ -290,6 +303,7 @@ mod v3 {
     ),
 )]
 #[get("/v3/sbom/by-package")]
+#[allow(clippy::too_many_arguments)]
 pub async fn all_related(
     sbom: web::Data<SbomService>,
     db: web::Data<db::ReadOnly>,
@@ -298,13 +312,16 @@ pub async fn all_related(
     web::Query(all_related): web::Query<ExternalReferenceQuery>,
     authorizer: web::Data<Authorizer>,
     user: UserInformation,
+    scope: AccessScope,
 ) -> Result<impl Responder, Error> {
     authorizer.require(&user, Permission::ReadSbom)?;
 
     let id = (&all_related).try_into()?;
     let tx = db.begin().await?;
 
-    let result = sbom.find_related_sboms(id, paginated, search, &tx).await?;
+    let result = sbom
+        .find_related_sboms(id, paginated, search, visible_groups(&scope), &tx)
+        .await?;
 
     Ok(HttpResponse::Ok().json(result))
 }
@@ -328,6 +345,7 @@ pub async fn count_related(
     sbom: web::Data<SbomService>,
     db: web::Data<db::ReadOnly>,
     web::Json(ids): web::Json<Vec<ExternalReferenceQuery>>,
+    scope: AccessScope,
     _: Require<ReadSbom>,
 ) -> Result<impl Responder, Error> {
     let ids = ids
@@ -336,7 +354,9 @@ pub async fn count_related(
         .collect::<Result<Vec<_>, _>>()?;
 
     let tx = db.begin().await?;
-    let result = sbom.count_related_sboms(ids, &tx).await?;
+    let result = sbom
+        .count_related_sboms(ids, visible_groups(&scope), &tx)
+        .await?;
 
     Ok(HttpResponse::Ok().json(result))
 }
@@ -358,11 +378,13 @@ pub async fn get(
     fetcher: web::Data<SbomService>,
     db: web::Data<db::ReadOnly>,
     id: web::Path<String>,
+    scope: AccessScope,
     _: Require<ReadSbom>,
 ) -> Result<impl Responder, Error> {
     let id = Id::from_str(&id).map_err(Error::IdKey)?;
 
     let tx = db.begin().await?;
+    require_sbom(&scope, Permission::ReadSbom, &id, &tx).await?;
 
     match fetcher.fetch_sbom_summary(id, &tx).await? {
         Some(v) => Ok(HttpResponse::Ok().json(v)),
@@ -397,10 +419,12 @@ pub async fn get_sbom_advisories(
     db: web::Data<db::ReadOnly>,
     id: web::Path<String>,
     web::Query(SbomAdvisoryParams { include_resolved }): web::Query<SbomAdvisoryParams>,
+    scope: AccessScope,
     _: Require<GetSbomAdvisories>,
 ) -> Result<impl Responder, Error> {
     let id = Id::from_str(&id).map_err(Error::IdKey)?;
     let tx = db.begin().await?;
+    require_sbom(&scope, Permission::ReadSbom, &id, &tx).await?;
 
     let statuses: Vec<String> = if include_resolved {
         vec![
@@ -450,6 +474,7 @@ pub async fn delete(
     service: web::Data<SbomService>,
     db: web::Data<db::ReadWrite>,
     id: web::Path<String>,
+    scope: AccessScope,
     _: Require<DeleteSbom>,
 ) -> Result<impl Responder, Error> {
     let tx = db.begin().await?;
@@ -457,6 +482,10 @@ pub async fn delete(
     let Ok(id) = Id::from_str(&id) else {
         return Ok(HttpResponse::NoContent().finish());
     };
+    // an inaccessible SBOM is handled like one which doesn't exist
+    if !can_access(&scope, Permission::DeleteSbom, &id, &tx).await? {
+        return Ok(HttpResponse::NoContent().finish());
+    }
     if let Some((v, _, _)) = service.fetch_sbom(id, &tx).await?
         && let digests = service.delete_sboms(vec![v.sbom_id], &tx).await?
         && !digests.is_empty()
@@ -486,20 +515,27 @@ pub async fn delete_many(
     service: web::Data<SbomService>,
     db: web::Data<db::ReadWrite>,
     web::Json(body): web::Json<Vec<String>>,
+    scope: AccessScope,
     _: Require<DeleteSbom>,
 ) -> Result<impl Responder, Error> {
     let tx = db.begin().await?;
 
     let mut ids: Vec<Uuid> = Vec::new();
     for s in body {
-        match Id::from_str(&s) {
-            Ok(Id::Uuid(uuid)) => ids.push(uuid),
-            Ok(digest_id) => {
+        let Ok(id) = Id::from_str(&s) else {
+            continue;
+        };
+        // inaccessible SBOMs are handled like ones which don't exist
+        if !can_access(&scope, Permission::DeleteSbom, &id, &tx).await? {
+            continue;
+        }
+        match id {
+            Id::Uuid(uuid) => ids.push(uuid),
+            digest_id => {
                 if let Some((v, _, _)) = service.fetch_sbom(digest_id, &tx).await? {
                     ids.push(v.sbom_id);
                 }
             }
-            Err(_) => {}
         }
     }
 
@@ -534,10 +570,12 @@ pub async fn packages(
     id: web::Path<String>,
     web::Query(search): web::Query<Query>,
     web::Query(paginated): web::Query<Paginated>,
+    scope: AccessScope,
     _: Require<ReadSbom>,
 ) -> Result<impl Responder, Error> {
     let id = Id::from_str(&id).map_err(Error::IdKey)?;
     let tx = db.begin().await?;
+    require_sbom(&scope, Permission::ReadSbom, &id, &tx).await?;
 
     let Some((sbom, _, _)) = fetch.fetch_sbom(id, &tx).await? else {
         return Ok(HttpResponse::NotFound().finish());
@@ -565,6 +603,7 @@ pub async fn packages(
     ),
 )]
 #[get("/v3/sbom/{id}/models")]
+#[allow(clippy::too_many_arguments)]
 pub async fn models(
     fetch: web::Data<SbomService>,
     db: web::Data<db::ReadOnly>,
@@ -572,11 +611,21 @@ pub async fn models(
     web::Query(search): web::Query<Query>,
     web::Query(paginated): web::Query<Paginated>,
     web::Query(ModelGetParams { counts }): web::Query<ModelGetParams>,
+    scope: AccessScope,
     _: Require<ReadSbom>,
 ) -> Result<impl Responder, Error> {
+    let id = id.into_inner();
     let tx = db.begin().await?;
+    require_sbom(&scope, Permission::ReadSbom, &Id::Uuid(id), &tx).await?;
     let result = fetch
-        .fetch_sbom_models(Some(id.into_inner()), search, paginated, counts, &tx)
+        .fetch_sbom_models(
+            Some(id),
+            search,
+            paginated,
+            counts,
+            visible_groups(&scope),
+            &tx,
+        )
         .await?;
     Ok(HttpResponse::Ok().json(result))
 }
@@ -601,11 +650,12 @@ pub async fn all_models(
     web::Query(search): web::Query<Query>,
     web::Query(paginated): web::Query<Paginated>,
     web::Query(ModelGetParams { counts }): web::Query<ModelGetParams>,
+    scope: AccessScope,
     _: Require<ReadSbom>,
 ) -> Result<impl Responder, Error> {
     let tx = db.begin().await?;
     let result = fetch
-        .fetch_sbom_models(None, search, paginated, counts, &tx)
+        .fetch_sbom_models(None, search, paginated, counts, visible_groups(&scope), &tx)
         .await?;
     Ok(HttpResponse::Ok().json(result))
 }
@@ -639,6 +689,7 @@ struct RelatedQuery {
     ),
 )]
 #[get("/v3/sbom/{id}/related")]
+#[allow(clippy::too_many_arguments)]
 pub async fn related(
     fetch: web::Data<SbomService>,
     db: web::Data<db::ReadOnly>,
@@ -646,10 +697,12 @@ pub async fn related(
     web::Query(search): web::Query<Query>,
     web::Query(paginated): web::Query<Paginated>,
     web::Query(related): web::Query<RelatedQuery>,
+    scope: AccessScope,
     _: Require<ReadSbom>,
 ) -> Result<impl Responder, Error> {
     let id = Id::from_str(&id).map_err(Error::IdKey)?;
     let tx = db.begin().await?;
+    require_sbom(&scope, Permission::ReadSbom, &id, &tx).await?;
 
     let Some((sbom, _, _)) = fetch.fetch_sbom(id, &tx).await? else {
         return Ok(HttpResponse::NotFound().finish());
@@ -701,6 +754,29 @@ struct UploadQuery {
 
 const fn default_format() -> Format {
     Format::SBOM
+}
+
+/// Ensure uploads with a scoped access go into groups which allow it.
+///
+/// Uploads without a group would not be accessible, so at least one group is required.
+fn require_upload_groups(scope: &AccessScope, groups: &[String]) -> Result<(), Error> {
+    if scope.is_unrestricted() {
+        return Ok(());
+    }
+
+    if groups.is_empty() {
+        return Err(Error::bad_request(
+            "Missing group",
+            Some("At least one group is required for uploading an SBOM"),
+        ));
+    }
+
+    for group in groups {
+        require_group(scope, Permission::CreateSbom, group)
+            .map_err(|_| Error::bad_request("Invalid group", Some(group.clone())))?;
+    }
+
+    Ok(())
 }
 
 /// Apply the scope of the API key, if the upload was authenticated using one.
@@ -777,9 +853,11 @@ pub async fn upload(
     content_type: Option<web::Header<header::ContentType>>,
     bytes: web::Bytes,
     user: UserInformation,
+    scope: AccessScope,
     _: Require<CreateSbom>,
 ) -> Result<impl Responder, Error> {
     apply_api_key(&user, &mut group, &mut labels)?;
+    require_upload_groups(&scope, &group)?;
 
     let format = format
         .ensure_allowed_for(default_format())
@@ -829,10 +907,12 @@ pub async fn download(
     db: web::Data<db::ReadOnly>,
     sbom: web::Data<SbomService>,
     key: web::Path<String>,
+    scope: AccessScope,
     _: Require<ReadSbom>,
 ) -> Result<impl Responder, Error> {
     let id = Id::from_str(&key).map_err(Error::IdKey)?;
     let tx = db.begin().await?;
+    require_sbom(&scope, Permission::ReadSbom, &id, &tx).await?;
 
     let Some(sbom) = sbom.fetch_sbom_summary(id, &tx).await? else {
         return Ok(HttpResponse::NotFound().finish());
