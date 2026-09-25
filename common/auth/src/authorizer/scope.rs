@@ -34,6 +34,11 @@ impl ScopedAccess {
     pub fn is_empty(&self) -> bool {
         self.groups.is_empty()
     }
+
+    /// The groups, and the permissions granted in each of them.
+    pub fn groups(&self) -> impl Iterator<Item = (&Uuid, &HashSet<Permission>)> {
+        self.groups.iter()
+    }
 }
 
 impl AccessScope {
