@@ -12,8 +12,12 @@ trustify-common = { workspace = true }
 trustify-entity = { workspace = true }
 
 actix-web = { workspace = true }
+async-trait = { workspace = true }
+clap = { workspace = true, features = ["derive", "env"] }
+humantime = { workspace = true }
 log = { workspace = true }
 moka = { workspace = true, features = ["future"] }
+ring = { workspace = true }
 sea-orm = { workspace = true }
 sea-query = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

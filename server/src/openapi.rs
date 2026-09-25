@@ -48,6 +48,7 @@ pub async fn create_openapi() -> anyhow::Result<utoipa::openapi::OpenApi> {
                     validators: Vec::new(),
                     format_filter: VariantFilter::default(),
                     importer_filter: VariantFilter::default(),
+                    tenancy: None,
                 },
             );
         })

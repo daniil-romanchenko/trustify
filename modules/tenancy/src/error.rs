@@ -36,6 +36,8 @@ pub enum Error {
     Unavailable,
     #[error("Internal Server Error: {0}")]
     Internal(String),
+    #[error("{0} are disabled")]
+    Disabled(&'static str),
 }
 
 impl Error {
@@ -109,6 +111,9 @@ impl ResponseError for Error {
             }
             Self::RevisionNotFound => HttpResponse::PreconditionFailed()
                 .json(ErrorInformation::new("RevisionNotFound", self)),
+            Self::Disabled(_) => {
+                HttpResponse::ServiceUnavailable().json(ErrorInformation::new("Disabled", self))
+            }
             Self::Unavailable => {
                 HttpResponse::ServiceUnavailable().json(ErrorInformation::new("Unavailable", self))
             }

@@ -15,7 +15,11 @@ use futures::{FutureExt, future::LocalBoxFuture};
 use opentelemetry_instrumentation_actix_web::{RequestMetrics, RequestTracing};
 use std::sync::Arc;
 use trustify_auth::{
-    authenticator::{Authenticator, actix::openid_validator},
+    authenticator::{
+        Authenticator,
+        actix::{openid_validator, token_validator},
+        token::TokenValidator,
+    },
     authorizer::Authorizer,
 };
 use trustify_common::middleware::StdMiddleware;
@@ -86,6 +90,31 @@ pub fn new_auth(
         HttpAuthentication::bearer(move |req, auth| {
             let authenticator = authenticator.clone();
             Box::pin(async move { openid_validator(req, auth, authenticator).await }).boxed_local()
+        })
+    }))
+}
+
+/// create a new authenticator, which also accepts tokens handled by the additional validators
+#[allow(clippy::type_complexity)]
+pub fn new_auth_with(
+    auth: Option<Arc<Authenticator>>,
+    validators: Vec<Arc<dyn TokenValidator>>,
+) -> Condition<
+    HttpAuthentication<
+        BearerAuth,
+        impl Fn(
+            ServiceRequest,
+            BearerAuth,
+        ) -> LocalBoxFuture<'static, Result<ServiceRequest, (Error, ServiceRequest)>>,
+    >,
+> {
+    let validators: Arc<[Arc<dyn TokenValidator>]> = validators.into();
+    Condition::from_option(auth.map(move |authenticator| {
+        HttpAuthentication::bearer(move |req, auth| {
+            let authenticator = authenticator.clone();
+            let validators = validators.clone();
+            Box::pin(async move { token_validator(req, auth, authenticator, validators).await })
+                .boxed_local()
         })
     }))
 }

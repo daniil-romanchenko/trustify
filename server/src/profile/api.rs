@@ -76,7 +76,7 @@ use trustify_infrastructure::{
     Infrastructure, InfrastructureConfig, InitContext,
     app::{
         http::{HttpServerBuilder, HttpServerConfig},
-        new_auth,
+        new_auth_with,
     },
     endpoint::Trustify,
     otel::{Metrics as OtelMetrics, Tracing},
@@ -93,7 +93,9 @@ use trustify_module_ingestor::{
 };
 use trustify_module_notification::config::NotificationConfig;
 use trustify_module_storage::{config::StorageConfig, service::dispatch::DispatchBackend};
-use trustify_module_tenancy::principal::{PrincipalResolver, resolve_principal};
+use trustify_module_tenancy::{
+    api_key::config::TenancyConfig, endpoints::Tenancy, principal::resolve_principal,
+};
 use trustify_module_ui::{UI, endpoints::UiResources};
 use utoipa::openapi::{Info, License};
 
@@ -222,6 +224,10 @@ pub struct Run {
     /// Notification configuration
     #[command(flatten)]
     pub notification: NotificationConfig,
+
+    /// Tenancy configuration
+    #[command(flatten)]
+    pub tenancy: TenancyConfig,
 
     /// Database configuration
     #[command(flatten)]
@@ -481,6 +487,7 @@ struct InitData {
     validators: Vec<Arc<dyn Validator>>,
     format_filter: VariantFilter,
     importer_filter: VariantFilter,
+    tenancy: Tenancy,
 }
 
 /// Groups all module configurations.
@@ -489,6 +496,7 @@ pub(crate) struct ModuleConfig {
     fundamental: trustify_module_fundamental::endpoints::Config,
     ingestor: trustify_module_ingestor::endpoints::Config,
     ui: trustify_module_ui::endpoints::Config,
+    tenancy: TenancyConfig,
 }
 
 impl Run {
@@ -586,6 +594,7 @@ impl InitData {
             ui: trustify_module_ui::endpoints::Config {
                 scan_limit: run.scan_limit.into(),
             },
+            tenancy: run.tenancy.clone(),
         };
 
         let ei_config = run.exploit_intelligence.into_config().await?;
@@ -658,8 +667,12 @@ impl InitData {
             *run.notification.change_log_cleanup_interval,
         )?;
 
+        // shared across all workers, so that cache invalidation affects all of them
+        let tenancy = Tenancy::new(&run.tenancy, db_rw.clone(), cache.clone());
+
         Ok(InitData {
             analysis: AnalysisService::new(run.analysis, db_ro.clone()),
+            tenancy,
             broadcaster,
             authenticator,
             authorizer,
@@ -724,6 +737,7 @@ impl InitData {
                             validators: self.validators.clone(),
                             format_filter: self.format_filter.clone(),
                             importer_filter: self.importer_filter.clone(),
+                            tenancy: Some(self.tenancy.clone()),
                         },
                     );
                 })
@@ -816,6 +830,8 @@ pub(crate) struct Config {
     pub(crate) validators: Vec<Arc<dyn Validator>>,
     pub(crate) format_filter: VariantFilter,
     pub(crate) importer_filter: VariantFilter,
+    /// Shared tenancy state, created from the module config if absent.
+    pub(crate) tenancy: Option<Tenancy>,
 }
 
 pub(crate) fn configure(svc: &mut utoipa_actix_web::service_config::ServiceConfig, config: Config) {
@@ -825,6 +841,7 @@ pub(crate) fn configure(svc: &mut utoipa_actix_web::service_config::ServiceConfi
                 ingestor,
                 fundamental,
                 ui,
+                tenancy: tenancy_config,
             },
         db_rw,
         db_ro,
@@ -841,7 +858,11 @@ pub(crate) fn configure(svc: &mut utoipa_actix_web::service_config::ServiceConfi
         validators,
         format_filter,
         importer_filter,
+        tenancy,
     } = config;
+
+    let tenancy =
+        tenancy.unwrap_or_else(|| Tenancy::new(&tenancy_config, db_rw.clone(), cache.clone()));
 
     let limit = ByteSize::gb(1).as_u64() as usize;
 
@@ -859,8 +880,8 @@ pub(crate) fn configure(svc: &mut utoipa_actix_web::service_config::ServiceConfi
         trustify_module_notification::endpoints::configure(svc, broadcaster, auth.clone());
     });
 
-    let principal_resolver = Arc::new(PrincipalResolver::new(db_rw.clone(), true));
-    let principal_middleware = principal_resolver.clone();
+    let principal_resolver = tenancy.resolver.clone();
+    let token_validators = tenancy.token_validators();
 
     svc.service(
         utoipa_actix_web::scope("/api")
@@ -868,9 +889,9 @@ pub(crate) fn configure(svc: &mut utoipa_actix_web::service_config::ServiceConfi
                 // the principal must be resolved after authentication, which means wrapping it first
                 scope
                     .wrap(from_fn(move |req, next| {
-                        resolve_principal(principal_middleware.clone(), req, next)
+                        resolve_principal(principal_resolver.clone(), req, next)
                     }))
-                    .wrap(new_auth(auth))
+                    .wrap(new_auth_with(auth, token_validators))
             })
             .configure(|svc| {
                 trustify_module_importer::endpoints::configure(
@@ -912,7 +933,7 @@ pub(crate) fn configure(svc: &mut utoipa_actix_web::service_config::ServiceConfi
                     db_rw.clone(),
                     db_ro.clone(),
                     cache,
-                    principal_resolver,
+                    tenancy,
                 );
                 trustify_module_user::endpoints::configure(svc);
                 trustify_module_ui::endpoints::configure(svc, ui)
@@ -1009,6 +1030,7 @@ mod test {
                             validators: Vec::new(),
                             format_filter: VariantFilter::default(),
                             importer_filter: VariantFilter::default(),
+                            tenancy: None,
                         },
                     );
                 })
@@ -1100,6 +1122,7 @@ mod test {
                     validators: Vec::new(),
                     format_filter: VariantFilter::default(),
                     importer_filter: VariantFilter::default(),
+                    tenancy: None,
                 },
             );
         })
@@ -1321,6 +1344,11 @@ mod test {
             validators: Vec::new(),
             format_filter: VariantFilter::default(),
             importer_filter: VariantFilter::default(),
+            tenancy: Tenancy::new(
+                &Default::default(),
+                db::ReadWrite::new(ctx.db.clone()),
+                PaginationCache::for_test(),
+            ),
         };
         let graph = Graph::new();
 
@@ -1385,6 +1413,7 @@ mod test {
                     validators: Vec::new(),
                     format_filter: VariantFilter::default(),
                     importer_filter: VariantFilter::default(),
+                    tenancy: None,
                 },
             );
         })
