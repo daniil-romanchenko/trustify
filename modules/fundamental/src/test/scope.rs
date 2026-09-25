@@ -436,3 +436,25 @@ async fn groups(ctx: &TrustifyContext) -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[test_context(TrustifyContext)]
+#[test(actix_web::test)]
+async fn recommend_report(ctx: &TrustifyContext) -> anyhow::Result<()> {
+    let app = caller(ctx).await?;
+    let t = Tenants::new(ctx).await?;
+
+    let report: Value = app
+        .call_and_read_body_json(scoped(
+            TestRequest::post()
+                .uri("/api/v3/recommend/report")
+                .set_json(json!({"sbom_ids": [t.sbom_a, t.sbom_b]})),
+            &viewer(t.a),
+        ))
+        .await;
+
+    // SBOM B is not part of the report, as if it didn't exist
+    let text = report.to_string();
+    assert!(!text.contains(&t.sbom_b), "{report:#}");
+
+    Ok(())
+}
