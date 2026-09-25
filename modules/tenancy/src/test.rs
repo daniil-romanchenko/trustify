@@ -1,19 +1,36 @@
 //! Test helpers
 
-use crate::endpoints::configure;
+use crate::{
+    endpoints::configure,
+    principal::{PrincipalResolver, resolve_principal},
+};
+use actix_web::middleware::from_fn;
 use sea_orm::{ActiveModelTrait, ConnectionTrait, DatabaseBackend, Set, Statement};
+use std::sync::Arc;
 use trustify_common::db::{self, pagination_cache::PaginationCache};
 use trustify_entity::{labels::Labels, sbom_group};
 use trustify_test_context::{TrustifyContext, call::CallService};
 use uuid::Uuid;
 
-/// Create a test app, serving the tenancy endpoints.
+/// Create a test app, serving the tenancy endpoints, and resolving principals.
 pub async fn caller(ctx: &TrustifyContext) -> anyhow::Result<impl CallService + '_> {
     let db_rw = db::ReadWrite::new(ctx.db.clone());
     let db_ro = db::ReadOnly::new(ctx.db.clone());
+    let resolver = Arc::new(PrincipalResolver::new(db_rw.clone(), true));
+    let middleware = resolver.clone();
 
-    trustify_test_context::call::caller(|svc| {
-        configure(svc, db_rw, db_ro, PaginationCache::for_test())
+    trustify_test_context::call::caller(move |svc| {
+        svc.service(
+            utoipa_actix_web::scope("")
+                .map(|scope| {
+                    scope.wrap(from_fn(move |req, next| {
+                        resolve_principal(middleware.clone(), req, next)
+                    }))
+                })
+                .configure(|svc| {
+                    configure(svc, db_rw, db_ro, PaginationCache::for_test(), resolver)
+                }),
+        );
     })
     .await
 }

@@ -356,40 +356,43 @@ impl UserService {
             return Ok(None);
         };
 
-        let teams = team_member::Entity::find()
-            .select_only()
-            .column(team_member::Column::TeamId)
-            .filter(team_member::Column::UserId.eq(user.id))
-            .into_tuple::<Uuid>()
-            .all(db)
-            .await?;
-
-        let bindings = role_binding::Entity::find()
-            .filter(
-                Expr::col(role_binding::Column::UserId)
-                    .eq(user.id)
-                    .or(Expr::col(role_binding::Column::TeamId).is_in(teams)),
-            )
-            .order_by_asc(role_binding::Column::GroupId)
-            .all(db)
-            .await?;
-
-        Ok(Some(
-            bindings
-                .into_iter()
-                .map(|binding| Access {
-                    group: binding.group_id.to_string(),
-                    role: binding.role,
-                    via: match binding.team_id {
-                        Some(team) => Via::Team {
-                            id: team.to_string(),
-                        },
-                        None => Via::Direct,
-                    },
-                })
-                .collect(),
-        ))
+        Ok(Some(access_of(user.id, db).await?))
     }
+}
+
+/// Get all role bindings which apply to a user, by the ID of the user.
+pub async fn access_of(user_id: Uuid, db: &impl ConnectionTrait) -> Result<Vec<Access>, Error> {
+    let teams = team_member::Entity::find()
+        .select_only()
+        .column(team_member::Column::TeamId)
+        .filter(team_member::Column::UserId.eq(user_id))
+        .into_tuple::<Uuid>()
+        .all(db)
+        .await?;
+
+    let bindings = role_binding::Entity::find()
+        .filter(
+            Expr::col(role_binding::Column::UserId)
+                .eq(user_id)
+                .or(Expr::col(role_binding::Column::TeamId).is_in(teams)),
+        )
+        .order_by_asc(role_binding::Column::GroupId)
+        .all(db)
+        .await?;
+
+    Ok(bindings
+        .into_iter()
+        .map(|binding| Access {
+            group: binding.group_id.to_string(),
+            role: binding.role,
+            via: match binding.team_id {
+                Some(team) => Via::Team {
+                    id: team.to_string(),
+                },
+                None => Via::Direct,
+            },
+        })
+        .collect())
 }
 
 fn conflict_on_duplicate(err: DbErr) -> Error {
