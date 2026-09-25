@@ -1,5 +1,8 @@
 use super::Authenticator;
-use super::{token::TokenValidator, user::UserInformation};
+use super::{
+    token::{ClientAddress, TokenValidator},
+    user::UserInformation,
+};
 use actix_http::HttpMessage;
 use actix_web::dev::ServiceRequest;
 use actix_web_httpauth::extractors::bearer::BearerAuth;
@@ -20,8 +23,9 @@ pub async fn token_validator(
     authenticator: Arc<Authenticator>,
     validators: Arc<[Arc<dyn TokenValidator>]>,
 ) -> Result<ServiceRequest, (actix_web::Error, ServiceRequest)> {
+    let client = client_address(&req);
     for validator in validators.iter() {
-        match validator.validate(auth.token()).await {
+        match validator.validate(auth.token(), client).await {
             None => continue,
             Some(Ok(details)) => {
                 req.extensions_mut()
@@ -47,4 +51,23 @@ pub async fn token_validator(
             Err((err.into(), req))
         }
     }
+}
+
+/// Determine the address of the client.
+fn client_address(req: &ServiceRequest) -> ClientAddress {
+    let parse = |value: &str| {
+        value
+            .parse::<std::net::IpAddr>()
+            .or_else(|_| value.parse::<std::net::SocketAddr>().map(|addr| addr.ip()))
+            .ok()
+    };
+
+    let peer = req.peer_addr().map(|addr| addr.ip());
+    let forwarded = req
+        .connection_info()
+        .realip_remote_addr()
+        .and_then(parse)
+        .filter(|forwarded| Some(*forwarded) != peer);
+
+    ClientAddress { peer, forwarded }
 }

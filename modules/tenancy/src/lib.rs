@@ -5,6 +5,7 @@
 
 pub mod api_key;
 pub mod audit;
+pub mod audit_log;
 pub mod authz;
 pub mod binding;
 pub mod email;
