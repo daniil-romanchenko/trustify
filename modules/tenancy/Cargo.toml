@@ -13,6 +13,7 @@ trustify-entity = { workspace = true }
 
 actix-web = { workspace = true }
 log = { workspace = true }
+moka = { workspace = true, features = ["future"] }
 sea-orm = { workspace = true, features = ["sea-query-binder", "sqlx-postgres", "runtime-tokio-rustls", "macros", "debug-print"] }
 sea-query = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

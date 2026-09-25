@@ -2491,6 +2491,21 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SpdxLicenseDetails'
+  /api/v3/me:
+    get:
+      tags:
+      - tenancy
+      summary: Get information about the calling user
+      operationId: getMe
+      responses:
+        '200':
+          description: Information about the calling user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+        '401':
+          description: The user was not authenticated, or is disabled
   /api/v3/organization:
     get:
       tags:
@@ -6981,6 +6996,33 @@ components:
       properties:
         license:
           type: string
+    Me:
+      type: object
+      description: Information about the calling user.
+      required:
+      - permissions
+      - access
+      properties:
+        access:
+          type: array
+          items:
+            $ref: '#/components/schemas/Access'
+          description: Roles on SBOM groups, granted to the user directly or through teams.
+        permissions:
+          type: array
+          items:
+            type: string
+          description: Global permissions, granted through the access token.
+        subject:
+          type:
+          - string
+          - 'null'
+          description: The subject of the access token, absent for anonymous requests.
+        user:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/User'
+            description: The user linked to the access token, absent if there is none.
     Member:
       type: object
       description: A member of a team.

@@ -1008,6 +1008,7 @@ async fn format_permission_enforcement(
     let user = UserDetails {
         id: "test-user".into(),
         permissions: vec![permission.into()],
+        ..Default::default()
     };
 
     let payload = document_bytes(document).await?;

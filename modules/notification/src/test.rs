@@ -313,6 +313,7 @@ fn user_with_permissions(perms: &[&str]) -> UserDetails {
     UserDetails {
         id: "test-user".into(),
         permissions: perms.iter().map(|s| s.to_string()).collect(),
+        ..Default::default()
     }
 }
 

@@ -8,6 +8,8 @@ pub mod binding;
 pub mod email;
 pub mod endpoints;
 pub mod error;
+pub mod me;
+pub mod principal;
 pub mod team;
 pub mod user;
 
