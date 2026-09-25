@@ -8836,6 +8836,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "trustify-module-tenancy"
+version = "0.6.0-rc.1"
+dependencies = [
+ "actix-http",
+ "actix-web",
+ "anyhow",
+ "log",
+ "rstest",
+ "sea-orm",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "test-context",
+ "test-log",
+ "thiserror 2.0.20",
+ "time",
+ "tokio",
+ "trustify-auth",
+ "trustify-common",
+ "trustify-entity",
+ "trustify-test-context",
+ "utoipa",
+ "utoipa-actix-web",
+ "uuid",
+]
+
+[[package]]
 name = "trustify-module-ui"
 version = "0.6.2"
 dependencies = [
@@ -8926,6 +8953,7 @@ dependencies = [
  "trustify-module-importer",
  "trustify-module-ingestor",
  "trustify-module-storage",
+ "trustify-module-tenancy",
  "trustify-module-ui",
  "trustify-module-user",
  "trustify-test-context",

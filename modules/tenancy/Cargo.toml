@@ -1,0 +1,35 @@
+[package]
+name = "trustify-module-tenancy"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+trustify-auth = { workspace = true }
+trustify-common = { workspace = true }
+trustify-entity = { workspace = true }
+
+actix-web = { workspace = true }
+log = { workspace = true }
+sea-orm = { workspace = true, features = ["sea-query-binder", "sqlx-postgres", "runtime-tokio-rustls", "macros", "debug-print"] }
+sea-query = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+time = { workspace = true, features = ["serde-well-known"] }
+utoipa = { workspace = true, features = ["actix_extras", "time", "uuid"] }
+utoipa-actix-web = { workspace = true }
+uuid = { workspace = true, features = ["v5", "v7"] }
+
+[dev-dependencies]
+trustify-test-context = { workspace = true }
+
+actix-http = { workspace = true }
+anyhow = { workspace = true }
+rstest = { workspace = true }
+serde_json = { workspace = true }
+test-context = { workspace = true }
+test-log = { workspace = true, features = ["log", "trace"] }
+tokio = { workspace = true, features = ["full"] }

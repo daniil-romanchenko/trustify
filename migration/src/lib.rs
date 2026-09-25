@@ -75,6 +75,7 @@ mod m0002300_create_exploit;
 mod m0002360_pythonver_cmp_parallel_restricted;
 mod m0002370_importer_quay_auth;
 mod m0002380_version_function_parallelism;
+mod m0002390_create_tenancy;
 
 pub trait MigratorExt: Send {
     fn build_migrations() -> Migrations;
@@ -165,6 +166,7 @@ impl MigratorExt for Migrator {
             .normal(m0002360_pythonver_cmp_parallel_restricted::Migration)
             .normal(m0002370_importer_quay_auth::Migration)
             .normal(m0002380_version_function_parallelism::Migration)
+            .normal(m0002390_create_tenancy::Migration)
     }
 }
 

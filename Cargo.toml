@@ -14,6 +14,7 @@ members = [
     "modules/importer",
     "modules/ingestor",
     "modules/storage",
+    "modules/tenancy",
     "modules/ui",
     "modules/user",
     "query",
@@ -175,6 +176,7 @@ trustify-module-fundamental = { path = "modules/fundamental" }
 trustify-module-importer = { path = "modules/importer" }
 trustify-module-ingestor = { path = "modules/ingestor" }
 trustify-module-storage = { path = "modules/storage" }
+trustify-module-tenancy = { path = "modules/tenancy" }
 trustify-module-ui = { path = "modules/ui", default-features = false }
 trustify-module-user = { path = "modules/user" }
 trustify-query = {path = "query" }
