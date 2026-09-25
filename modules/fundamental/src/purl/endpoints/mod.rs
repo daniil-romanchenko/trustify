@@ -1,5 +1,6 @@
 use crate::{
     Error,
+    common::access::visible_sboms,
     endpoints::Deprecation,
     purl::{
         model::{
@@ -13,7 +14,10 @@ use actix_web::{HttpResponse, Responder, get, post, web};
 use regex::Regex;
 use sea_orm::prelude::Uuid;
 use std::str::FromStr;
-use trustify_auth::{ReadAdvisory, ReadSbom, authorizer::Require};
+use trustify_auth::{
+    ReadAdvisory, ReadSbom,
+    authorizer::{AccessScope, Require},
+};
 use trustify_common::{
     db::{self, pagination_cache::PaginationCache, query::Query},
     id::IdError,
@@ -191,10 +195,16 @@ mod v3 {
         purl_service: web::Data<PurlService>,
         db: web::Data<db::ReadOnly>,
         request: web::Json<RecommendReportRequest>,
+        scope: AccessScope,
         _: Require<ReadAdvisory>,
         _: Require<ReadSbom>,
     ) -> Result<impl Responder, Error> {
         let tx = db.begin().await?;
+        let mut request = request.into_inner();
+        // inaccessible SBOMs are handled as if they didn't exist
+        if let Some(visible) = visible_sboms(&scope, request.sbom_ids.clone(), &tx).await? {
+            request.sbom_ids.retain(|id| visible.contains(id));
+        }
         let total = purl_service
             .count_sbom_packages(&request.sbom_ids, &tx)
             .await?;
