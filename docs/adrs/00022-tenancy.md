@@ -104,9 +104,10 @@ additional infrastructure, and bounds staleness to a second.
 * An SBOM uploaded by two tenants is deduplicated, and assigned to groups of both.
 * API keys only work with authentication enabled.
 
-### Open questions
+### Resolved questions
 
-* Should identical SBOMs uploaded by different tenants become separate SBOMs?
-* Are fixed roles sufficient, or are custom roles required?
-* Should API keys also be allowed to read (e.g. for gating builds on vulnerabilities)?
-* Should team memberships be synchronized from IdP group claims?
+* Identical SBOMs uploaded by different tenants are shared: the SBOM is assigned to groups of both.
+* Roles are fixed, custom roles are not required.
+* API keys can only upload, reading is not required for now.
+* Team memberships are managed by the orchestration platform. Identity providers currently don't
+  provide group claims to Trustify, synchronizing from them may be added later.
