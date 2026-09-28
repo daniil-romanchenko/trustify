@@ -9,7 +9,7 @@ use sea_orm::{
     QueryTrait,
     sea_query::{Expr, IntoColumnRef, SelectStatement, SimpleExpr},
 };
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use trustify_auth::{Permission, authorizer::AccessScope};
 use trustify_common::id::{Id, TrySelectForId};
 use trustify_entity::{sbom, sbom_group_assignment};
@@ -138,4 +138,60 @@ pub async fn visible_sboms(
         .await?;
 
     Ok(Some(visible.into_iter().collect()))
+}
+
+/// Determine the permissions which apply to each of the SBOMs.
+///
+/// A permission applies if it is among the `granted` global permissions and, when access is scoped,
+/// is granted in any group the SBOM is assigned to. SBOMs which don't exist, or aren't visible,
+/// are omitted.
+pub async fn sbom_permissions(
+    scope: &AccessScope,
+    granted: &[Permission],
+    ids: Vec<Uuid>,
+    db: &impl ConnectionTrait,
+) -> Result<BTreeMap<Uuid, Vec<Permission>>, Error> {
+    if ids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    if scope.is_unrestricted() {
+        let existing = sbom::Entity::find()
+            .select_only()
+            .column(sbom::Column::SbomId)
+            .filter(sbom::Column::SbomId.is_in(ids))
+            .into_tuple::<Uuid>()
+            .all(db)
+            .await?;
+        return Ok(existing
+            .into_iter()
+            .map(|id| (id, granted.to_vec()))
+            .collect());
+    }
+
+    let mut groups: BTreeMap<Uuid, Vec<Uuid>> = BTreeMap::new();
+    for (sbom, group) in sbom_group_assignment::Entity::find()
+        .select_only()
+        .column(sbom_group_assignment::Column::SbomId)
+        .column(sbom_group_assignment::Column::GroupId)
+        .filter(sbom_group_assignment::Column::SbomId.is_in(ids))
+        .into_tuple::<(Uuid, Uuid)>()
+        .all(db)
+        .await?
+    {
+        groups.entry(sbom).or_default().push(group);
+    }
+
+    Ok(groups
+        .into_iter()
+        .filter(|(_, groups)| scope.allows_any(groups, Permission::ReadSbom))
+        .map(|(sbom, groups)| {
+            let permissions = granted
+                .iter()
+                .copied()
+                .filter(|permission| scope.allows_any(&groups, *permission))
+                .collect();
+            (sbom, permissions)
+        })
+        .collect())
 }
