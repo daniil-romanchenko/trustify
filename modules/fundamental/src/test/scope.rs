@@ -509,6 +509,16 @@ async fn sbom_permissions(ctx: &TrustifyContext) -> anyhow::Result<()> {
         })
     );
 
+    // IDs in the `urn:uuid:` form, as returned by the SBOM endpoints, are kept as requested
+    let request = TestRequest::post()
+        .uri("/api/v3/sbom-permissions")
+        .set_json(json!([format!("urn:uuid:{}", t.sbom_a), t.sbom_b]));
+    assert_eq!(
+        app.call_and_read_body_json::<Value>(scoped(request, &viewer(t.a)))
+            .await,
+        json!({ format!("urn:uuid:{}", t.sbom_a): ["read.sbom"] })
+    );
+
     // the number of SBOMs is limited
     let request = TestRequest::post()
         .uri("/api/v3/sbom-permissions")

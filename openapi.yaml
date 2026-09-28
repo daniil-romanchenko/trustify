@@ -3142,7 +3142,8 @@ paths:
       summary: Get the permissions of the caller on SBOMs
       description: |-
         When access is scoped, the permissions of an SBOM are those granted in any of the groups it is
-        assigned to. SBOMs which don't exist, or aren't visible, are omitted from the result.
+        assigned to. SBOMs which don't exist, or aren't visible, are omitted from the result. IDs are
+        UUIDs, optionally in the `urn:uuid:` form, and the result uses them as requested.
       operationId: getSbomPermissions
       requestBody:
         description: IDs of the SBOMs
