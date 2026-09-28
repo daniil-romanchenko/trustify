@@ -73,6 +73,7 @@ const ENDPOINTS: &[(&str, Class)] = &[
     ("/api/v3/recommend/report", Scoped),
     ("/api/v3/sbom", Scoped),
     ("/api/v3/sbom-labels", Scoped),
+    ("/api/v3/sbom-permissions", Scoped),
     ("/api/v3/sbom/by-package", Scoped),
     ("/api/v3/sbom/count-by-package", Scoped),
     ("/api/v3/sbom/models", Scoped),

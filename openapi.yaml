@@ -3135,6 +3135,33 @@ paths:
               schema:
                 type: array
                 items: {}
+  /api/v3/sbom-permissions:
+    post:
+      tags:
+      - sbom
+      summary: Get the permissions of the caller on SBOMs
+      description: |-
+        When access is scoped, the permissions of an SBOM are those granted in any of the groups it is
+        assigned to. SBOMs which don't exist, or aren't visible, are omitted from the result.
+      operationId: getSbomPermissions
+      requestBody:
+        description: IDs of the SBOMs
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                type: string
+        required: true
+      responses:
+        '200':
+          description: Permissions by SBOM ID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SbomPermissions'
+        '400':
+          description: Too many SBOMs were requested
   /api/v3/sbom/by-package:
     get:
       tags:
@@ -7548,6 +7575,15 @@ components:
           - string
           - 'null'
           description: An optional version for an SBOM package
+    SbomPermissions:
+      type: object
+      description: Permissions of the caller on individual SBOMs, by SBOM ID.
+      additionalProperties:
+        type: array
+        items:
+          type: string
+      propertyNames:
+        type: string
     SbomStatus:
       allOf:
       - $ref: '#/components/schemas/VulnerabilityHead'

@@ -5,14 +5,14 @@ mod query;
 mod test;
 
 pub use query::*;
-use utoipa::IntoParams;
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::{
     Error,
     common::{
         LicenseRefMapping,
-        access::{can_access, require_group, require_sbom, visible_groups},
+        access::{can_access, require_group, require_sbom, sbom_permissions, visible_groups},
     },
     license::{
         get_sanitize_filename,
@@ -32,7 +32,10 @@ use config::Config;
 use futures_util::TryStreamExt;
 use sea_orm::TransactionTrait;
 use serde_qs::actix::QsQuery;
-use std::{collections::HashSet, str::FromStr};
+use std::{
+    collections::{BTreeMap, HashSet},
+    str::FromStr,
+};
 use trustify_auth::{
     CreateSbom, DeleteSbom, Permission, ReadAdvisory, ReadSbom, all,
     authenticator::{
@@ -84,6 +87,7 @@ pub fn configure(
         .service(get_sbom_advisories)
         .service(delete)
         .service(delete_many)
+        .service(permissions)
         .service(packages)
         .service(models)
         .service(related)
@@ -474,6 +478,80 @@ pub async fn delete(
         delete_blobs(&digests, i.storage()).await;
     }
     Ok(HttpResponse::NoContent().finish())
+}
+
+/// The maximum number of SBOMs for which permissions can be requested at once.
+const MAX_PERMISSION_REQUEST: usize = 1000;
+
+/// The permissions which apply to individual SBOMs.
+const SBOM_PERMISSIONS: &[Permission] = &[
+    Permission::ReadSbom,
+    Permission::UpdateSbom,
+    Permission::DeleteSbom,
+];
+
+/// Permissions of the caller on individual SBOMs, by SBOM ID.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, ToSchema)]
+pub struct SbomPermissions(pub BTreeMap<String, Vec<String>>);
+
+/// Get the permissions of the caller on SBOMs
+///
+/// When access is scoped, the permissions of an SBOM are those granted in any of the groups it is
+/// assigned to. SBOMs which don't exist, or aren't visible, are omitted from the result.
+#[utoipa::path(
+    tag = "sbom",
+    operation_id = "getSbomPermissions",
+    request_body(
+        content = Vec<String>,
+        description = "IDs of the SBOMs",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Permissions by SBOM ID", body = SbomPermissions),
+        (status = 400, description = "Too many SBOMs were requested"),
+    ),
+)]
+#[post("/v3/sbom-permissions")]
+pub async fn permissions(
+    db: web::Data<db::ReadOnly>,
+    authorizer: web::Data<Authorizer>,
+    user: UserInformation,
+    scope: AccessScope,
+    web::Json(ids): web::Json<Vec<String>>,
+    _: Require<ReadSbom>,
+) -> Result<impl Responder, Error> {
+    if ids.len() > MAX_PERMISSION_REQUEST {
+        return Err(Error::BadRequest(
+            format!("At most {MAX_PERMISSION_REQUEST} SBOMs can be requested").into(),
+            None,
+        ));
+    }
+
+    let granted: Vec<Permission> = SBOM_PERMISSIONS
+        .iter()
+        .copied()
+        .filter(|permission| authorizer.require(&user, *permission).is_ok())
+        .collect();
+    // unknown IDs are handled like SBOMs which don't exist
+    let ids = ids
+        .iter()
+        .filter_map(|id| Uuid::parse_str(id).ok())
+        .collect();
+
+    let tx = db.begin().await?;
+    let permissions = sbom_permissions(&scope, &granted, ids, &tx).await?;
+
+    Ok(HttpResponse::Ok().json(SbomPermissions(
+        permissions
+            .into_iter()
+            .map(|(id, permissions)| {
+                (
+                    id.to_string(),
+                    permissions.iter().map(ToString::to_string).collect(),
+                )
+            })
+            .collect(),
+    )))
 }
 
 /// Delete multiple SBOMs
