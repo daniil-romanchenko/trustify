@@ -497,7 +497,8 @@ pub struct SbomPermissions(pub BTreeMap<String, Vec<String>>);
 /// Get the permissions of the caller on SBOMs
 ///
 /// When access is scoped, the permissions of an SBOM are those granted in any of the groups it is
-/// assigned to. SBOMs which don't exist, or aren't visible, are omitted from the result.
+/// assigned to. SBOMs which don't exist, or aren't visible, are omitted from the result. IDs are
+/// UUIDs, optionally in the `urn:uuid:` form, and the result uses them as requested.
 #[utoipa::path(
     tag = "sbom",
     operation_id = "getSbomPermissions",
@@ -533,22 +534,28 @@ pub async fn permissions(
         .filter(|permission| authorizer.require(&user, *permission).is_ok())
         .collect();
     // unknown IDs are handled like SBOMs which don't exist
-    let ids = ids
-        .iter()
-        .filter_map(|id| Uuid::parse_str(id).ok())
+    let requested: Vec<(String, Uuid)> = ids
+        .into_iter()
+        .filter_map(|id| Uuid::parse_str(&id).ok().map(|uuid| (id, uuid)))
         .collect();
 
     let tx = db.begin().await?;
-    let permissions = sbom_permissions(&scope, &granted, ids, &tx).await?;
+    let permissions = sbom_permissions(
+        &scope,
+        &granted,
+        requested.iter().map(|(_, uuid)| *uuid).collect(),
+        &tx,
+    )
+    .await?;
 
+    // respond using the IDs as requested, e.g. `urn:uuid:<uuid>` as used by other SBOM endpoints
     Ok(HttpResponse::Ok().json(SbomPermissions(
-        permissions
+        requested
             .into_iter()
-            .map(|(id, permissions)| {
-                (
-                    id.to_string(),
-                    permissions.iter().map(ToString::to_string).collect(),
-                )
+            .filter_map(|(id, uuid)| {
+                permissions
+                    .get(&uuid)
+                    .map(|permissions| (id, permissions.iter().map(ToString::to_string).collect()))
             })
             .collect(),
     )))
