@@ -1012,6 +1012,320 @@ paths:
           description: The user did not provide valid authentication credentials
         '403':
           description: The user lacks the required permission
+  /api/v3/api-key:
+    get:
+      tags:
+      - tenancy
+      summary: List API keys
+      operationId: listApiKeys
+      parameters:
+      - name: group
+        in: query
+        description: Only keys scoped to this group (ID, or `ext:<external id>`).
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: state
+        in: query
+        description: Only keys in this state.
+        required: false
+        schema:
+          oneOf:
+          - type: 'null'
+          - type: string
+            enum:
+            - active
+            - revoked
+      - name: offset
+        in: query
+        description: |-
+          The first item to return, skipping all that come before it.
+
+          NOTE: The order of items is defined by the API being called.
+        required: false
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+      - name: limit
+        in: query
+        description: |-
+          The maximum number of entries to return.
+
+          Zero means: return no items (the total count is still computed if requested).
+        required: false
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+      - name: total
+        in: query
+        description: Whether to compute and return the total count of matching items.
+        required: false
+        schema:
+          type: boolean
+      responses:
+        '200':
+          description: Matching API keys, without their tokens
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedResults_ApiKey'
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+    post:
+      tags:
+      - tenancy
+      summary: Create an API key
+      operationId: createApiKey
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApiKeyRequest'
+        required: true
+      responses:
+        '201':
+          description: The API key was created. The response contains the token, which cannot be retrieved later.
+          headers:
+            location:
+              schema:
+                type: string
+              description: The relative URL to the created resource
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssuedApiKey'
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+        '409':
+          description: The external ID is already in use
+        '503':
+          description: API keys are disabled
+  /api/v3/api-key/{key}:
+    get:
+      tags:
+      - tenancy
+      summary: Get an API key
+      operationId: getApiKey
+      parameters:
+      - name: key
+        in: path
+        description: The ID of the API key, or `ext:<external id>`
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: The API key, without its token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKey'
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+        '404':
+          description: The API key was not found
+    delete:
+      tags:
+      - tenancy
+      summary: Revoke an API key
+      operationId: revokeApiKey
+      parameters:
+      - name: key
+        in: path
+        description: The ID of the API key, or `ext:<external id>`
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: The API key was revoked, or did not exist
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+    patch:
+      tags:
+      - tenancy
+      summary: Change the name or labels of an API key
+      operationId: updateApiKey
+      parameters:
+      - name: key
+        in: path
+        description: The ID of the API key, or `ext:<external id>`
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApiKeyPatch'
+        required: true
+      responses:
+        '200':
+          description: The API key was updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKey'
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+        '404':
+          description: The API key was not found
+  /api/v3/api-key/{key}/rotate:
+    post:
+      tags:
+      - tenancy
+      summary: Rotate an API key
+      operationId: rotateApiKey
+      parameters:
+      - name: key
+        in: path
+        description: The ID of the API key, or `ext:<external id>`
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RotateRequest'
+        required: true
+      responses:
+        '201':
+          description: A new API key was created, replacing the old one after the grace period. The response contains the token, which cannot be retrieved later.
+          headers:
+            location:
+              schema:
+                type: string
+              description: The relative URL to the created resource
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssuedApiKey'
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+        '404':
+          description: The API key was not found
+        '409':
+          description: The API key is not active
+        '503':
+          description: API keys are disabled
+  /api/v3/audit:
+    get:
+      tags:
+      - tenancy
+      summary: List audit events
+      operationId: listAuditEvents
+      parameters:
+      - name: targetKind
+        in: query
+        description: Only events of this kind of target, e.g. `user`.
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: targetId
+        in: query
+        description: Only events of this target.
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: actorId
+        in: query
+        description: Only events of this actor.
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: action
+        in: query
+        description: Only events of this action, e.g. `create`.
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: since
+        in: query
+        description: Only events at, or after, this time (RFC 3339).
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+          format: date-time
+      - name: offset
+        in: query
+        description: |-
+          The first item to return, skipping all that come before it.
+
+          NOTE: The order of items is defined by the API being called.
+        required: false
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+      - name: limit
+        in: query
+        description: |-
+          The maximum number of entries to return.
+
+          Zero means: return no items (the total count is still computed if requested).
+        required: false
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+      - name: total
+        in: query
+        description: Whether to compute and return the total count of matching items.
+        required: false
+        schema:
+          type: boolean
+      responses:
+        '200':
+          description: Matching audit events, newest first
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedResults_AuditEvent'
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
   /api/v3/dataset:
     post:
       tags:
@@ -1597,6 +1911,215 @@ paths:
           description: The user authenticated, but not authorized for this operation
         '412':
           description: The requested revision is not the current revision
+  /api/v3/group/sbom/{group}/binding:
+    get:
+      tags:
+      - tenancy
+      summary: List the role bindings directly on an SBOM group
+      operationId: listGroupBindings
+      parameters:
+      - name: group
+        in: path
+        description: The ID of the SBOM group, or `ext:<external id>`
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: The role bindings directly on the group
+          headers:
+            etag:
+              schema:
+                type: string
+              description: Revision of the bindings
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Binding'
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+        '404':
+          description: The group was not found
+    put:
+      tags:
+      - tenancy
+      summary: Replace all role bindings directly on an SBOM group
+      description: Users which are not yet known will be created as invited.
+      operationId: replaceGroupBindings
+      parameters:
+      - name: group
+        in: path
+        description: The ID of the SBOM group, or `ext:<external id>`
+        required: true
+        schema:
+          type: string
+      - name: if-match
+        in: header
+        description: The revision of the bindings to replace
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/BindingRequest'
+        required: true
+      responses:
+        '204':
+          description: The role bindings were replaced
+          headers:
+            etag:
+              schema:
+                type: string
+              description: Revision of the bindings
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+        '404':
+          description: The group was not found
+        '412':
+          description: The provided If-Match revision did not match the actual revision
+  /api/v3/group/sbom/{group}/binding/team/{team}:
+    put:
+      tags:
+      - tenancy
+      summary: Grant a role to a team on an SBOM group
+      operationId: setGroupTeamBinding
+      parameters:
+      - name: group
+        in: path
+        description: The ID of the SBOM group, or `ext:<external id>`
+        required: true
+        schema:
+          type: string
+      - name: team
+        in: path
+        description: The ID of the team, or `ext:<external id>`
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoleRequest'
+        required: true
+      responses:
+        '204':
+          description: The role was granted
+        '400':
+          description: The request was not valid, or the team does not exist
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+        '404':
+          description: The group was not found
+    delete:
+      tags:
+      - tenancy
+      summary: Remove the role of a team on an SBOM group
+      operationId: removeGroupTeamBinding
+      parameters:
+      - name: group
+        in: path
+        description: The ID of the SBOM group, or `ext:<external id>`
+        required: true
+        schema:
+          type: string
+      - name: team
+        in: path
+        description: The ID of the team, or `ext:<external id>`
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: The team holds no role on the group
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+  /api/v3/group/sbom/{group}/binding/user/{email}:
+    put:
+      tags:
+      - tenancy
+      summary: Grant a role to a user on an SBOM group
+      description: A user which is not yet known will be created as invited.
+      operationId: setGroupUserBinding
+      parameters:
+      - name: group
+        in: path
+        description: The ID of the SBOM group, or `ext:<external id>`
+        required: true
+        schema:
+          type: string
+      - name: email
+        in: path
+        description: The e-mail address of the user
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoleRequest'
+        required: true
+      responses:
+        '204':
+          description: The role was granted
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+        '404':
+          description: The group was not found
+    delete:
+      tags:
+      - tenancy
+      summary: Remove the role of a user on an SBOM group
+      operationId: removeGroupUserBinding
+      parameters:
+      - name: group
+        in: path
+        description: The ID of the SBOM group, or `ext:<external id>`
+        required: true
+        schema:
+          type: string
+      - name: email
+        in: path
+        description: The e-mail address of the user
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: The user holds no role on the group
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
   /api/v3/group/sbom/{id}:
     get:
       tags:
@@ -1606,7 +2129,7 @@ paths:
       parameters:
       - name: id
         in: path
-        description: The ID of the group to read
+        description: The ID of the group to read, or `ext:<external id>`
         required: true
         schema:
           type: string
@@ -1632,11 +2155,14 @@ paths:
       tags:
       - sbomGroup
       summary: Update an SBOM group
+      description: |-
+        When the group is addressed by its external ID (`ext:<external id>`) and does not yet exist,
+        it will be created.
       operationId: updateSbomGroup
       parameters:
       - name: id
         in: path
-        description: The ID of the group to update
+        description: The ID of the group to update, or `ext:<external id>`
         required: true
         schema:
           type: string
@@ -1655,14 +2181,22 @@ paths:
               $ref: '#/components/schemas/GroupRequest'
         required: true
       responses:
+        '201':
+          description: The group was addressed by external ID and has been created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateResponse'
         '204':
-          description: The group was delete or did not exist
+          description: The group was updated
         '400':
           description: The request was not valid
         '401':
           description: The user was not authenticated
         '403':
           description: The user authenticated, but not authorized for this operation
+        '404':
+          description: The group was not found
         '409':
           description: Assigning the parent would create a cycle
         '412':
@@ -1675,7 +2209,7 @@ paths:
       parameters:
       - name: id
         in: path
-        description: The ID of the group to delete
+        description: The ID of the group to delete, or `ext:<external id>`
         required: true
         schema:
           type: string
@@ -2271,6 +2805,21 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SpdxLicenseDetails'
+  /api/v3/me:
+    get:
+      tags:
+      - tenancy
+      summary: Get information about the calling user
+      operationId: getMe
+      responses:
+        '200':
+          description: Information about the calling user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+        '401':
+          description: The user was not authenticated, or is disabled
   /api/v3/organization:
     get:
       tags:
@@ -4041,6 +4590,506 @@ paths:
                 format: binary
         '404':
           description: The document could not be found
+  /api/v3/team:
+    get:
+      tags:
+      - tenancy
+      summary: List teams
+      operationId: listTeams
+      parameters:
+      - name: q
+        in: query
+        description: |
+          EBNF grammar for the _q_ parameter:
+          ```text
+              q = ( values | filter ) { '&' q }
+              values = value { '|', values }
+              filter = field, operator, values
+              operator = "=" | "!=" | "~" | "!~" | ">=" | ">" | "<=" | "<"
+              value = (* any text but escape special characters with '\' *)
+              field = (* must match an entity attribute name *)
+          ```
+          Any values in a _q_ will result in a case-insensitive "full
+          text search", effectively producing an OR clause of LIKE
+          clauses for every string-ish field in the resource being
+          queried.
+
+          Examples:
+          - `foo` - any field containing 'foo'
+          - `foo|bar` - any field containing either 'foo' OR 'bar'
+          - `foo&bar` - some field contains 'foo' AND some field contains 'bar'
+
+          A _filter_ may also be used to constrain the results. The
+          filter's field name must correspond to one of the resource's
+          attributes. If it doesn't, an error will be returned
+          containing a list of the valid fields for that resource.
+
+          An ASCII value of `NUL`, percent-encoded as `%00`, may be used
+          to find resources on which a particular field isn't set. For
+          example, `name=%00` and `name!=%00` yield the WHERE clauses,
+          'NAME IS NULL' and 'NAME IS NOT NULL', respectively.
+
+          Examples:
+          - `name=foo` - entity's _name_ matches 'foo' exactly
+          - `name~foo` - entity's _name_ contains 'foo', case-insensitive
+          - `name~foo|bar` - entity's _name_ contains either 'foo' OR 'bar', case-insensitive
+          - `name=` - entity's _name_ is the empty string, ''
+          - `name=%00` - entity's _name_ isn't set
+          - `published>3 days ago` - date values can be "human time"
+
+          Multiple full text searches and/or filters should be
+          '&'-delimited -- they are logically AND'd together.
+
+          - `red hat|fedora&labels:type=cve|osv&published>last wednesday 17:00`
+
+          Fields corresponding to JSON objects in the database may use a
+          ':' to delimit the column name and the object key,
+          e.g. `purl:qualifiers:type=pom`
+
+          Any operator or special character, e.g. '|', '&', within a
+          value should be escaped by prefixing it with a backslash.
+        required: false
+        schema:
+          type: string
+      - name: sort
+        in: query
+        description: |
+          EBNF grammar for the _sort_ parameter:
+          ```text
+              sort = field [ ':', order ] { ',' sort }
+              order = ( "asc" | "desc" )
+              field = (* must match the name of entity's attributes *)
+          ```
+          The optional _order_ should be one of "asc" or "desc". If
+          omitted, the order defaults to "asc".
+
+          Each _field_ name must correspond to one of the columns of the
+          table holding the entities being queried. Those corresponding
+          to JSON objects in the database may use a ':' to delimit the
+          column name and the object key,
+          e.g. `purl:qualifiers:type:desc`
+        required: false
+        schema:
+          type: string
+      - name: offset
+        in: query
+        description: |-
+          The first item to return, skipping all that come before it.
+
+          NOTE: The order of items is defined by the API being called.
+        required: false
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+      - name: limit
+        in: query
+        description: |-
+          The maximum number of entries to return.
+
+          Zero means: return no items (the total count is still computed if requested).
+        required: false
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+      - name: total
+        in: query
+        description: Whether to compute and return the total count of matching items.
+        required: false
+        schema:
+          type: boolean
+      responses:
+        '200':
+          description: Matching teams
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedResults_Team'
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+    post:
+      tags:
+      - tenancy
+      summary: Create a team
+      operationId: createTeam
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TeamRequest'
+        required: true
+      responses:
+        '201':
+          description: The team was created
+          headers:
+            etag:
+              schema:
+                type: string
+              description: Revision ID
+            location:
+              schema:
+                type: string
+              description: The relative URL to the created resource
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Team'
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+        '409':
+          description: The external ID is already in use
+  /api/v3/team/{key}:
+    get:
+      tags:
+      - tenancy
+      summary: Get a team
+      operationId: getTeam
+      parameters:
+      - name: key
+        in: path
+        description: The ID of the team, or `ext:<external id>`
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: The team
+          headers:
+            etag:
+              schema:
+                type: string
+              description: Revision ID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Team'
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+        '404':
+          description: The team was not found
+    put:
+      tags:
+      - tenancy
+      summary: Update a team, or create it when addressed by an external ID
+      operationId: putTeam
+      parameters:
+      - name: key
+        in: path
+        description: The ID of the team, or `ext:<external id>`
+        required: true
+        schema:
+          type: string
+      - name: if-match
+        in: header
+        description: The revision to update
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TeamRequest'
+        required: true
+      responses:
+        '200':
+          description: The team was updated
+          headers:
+            etag:
+              schema:
+                type: string
+              description: Revision ID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Team'
+        '201':
+          description: The team was addressed by external ID and has been created
+          headers:
+            etag:
+              schema:
+                type: string
+              description: Revision ID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Team'
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+        '404':
+          description: The team was addressed by ID and was not found
+        '409':
+          description: The external ID is already in use
+        '412':
+          description: The provided If-Match revision did not match the actual revision
+    delete:
+      tags:
+      - tenancy
+      summary: Delete a team, including its memberships and role bindings
+      operationId: deleteTeam
+      parameters:
+      - name: key
+        in: path
+        description: The ID of the team, or `ext:<external id>`
+        required: true
+        schema:
+          type: string
+      - name: if-match
+        in: header
+        description: The revision to delete
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      responses:
+        '204':
+          description: The team was deleted, or did not exist
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+        '412':
+          description: The provided If-Match revision did not match the actual revision
+  /api/v3/team/{key}/member:
+    get:
+      tags:
+      - tenancy
+      summary: List the members of a team
+      operationId: listTeamMembers
+      parameters:
+      - name: key
+        in: path
+        description: The ID of the team, or `ext:<external id>`
+        required: true
+        schema:
+          type: string
+      - name: offset
+        in: query
+        description: |-
+          The first item to return, skipping all that come before it.
+
+          NOTE: The order of items is defined by the API being called.
+        required: false
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+      - name: limit
+        in: query
+        description: |-
+          The maximum number of entries to return.
+
+          Zero means: return no items (the total count is still computed if requested).
+        required: false
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+      - name: total
+        in: query
+        description: Whether to compute and return the total count of matching items.
+        required: false
+        schema:
+          type: boolean
+      responses:
+        '200':
+          description: The members of the team
+          headers:
+            etag:
+              schema:
+                type: string
+              description: Revision ID of the team
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedResults_Member'
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+        '404':
+          description: The team was not found
+    put:
+      tags:
+      - tenancy
+      summary: Replace all members of a team
+      operationId: setTeamMembers
+      parameters:
+      - name: key
+        in: path
+        description: The ID of the team, or `ext:<external id>`
+        required: true
+        schema:
+          type: string
+      - name: if-match
+        in: header
+        description: The revision of the team to update
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MembersRequest'
+        required: true
+      responses:
+        '204':
+          description: The members were replaced
+          headers:
+            etag:
+              schema:
+                type: string
+              description: Revision ID of the team
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+        '404':
+          description: The team was not found
+        '412':
+          description: The provided If-Match revision did not match the actual revision
+    patch:
+      tags:
+      - tenancy
+      summary: Add and remove members of a team
+      operationId: patchTeamMembers
+      parameters:
+      - name: key
+        in: path
+        description: The ID of the team, or `ext:<external id>`
+        required: true
+        schema:
+          type: string
+      - name: if-match
+        in: header
+        description: The revision of the team to update
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MembersPatch'
+        required: true
+      responses:
+        '204':
+          description: The members were updated
+          headers:
+            etag:
+              schema:
+                type: string
+              description: Revision ID of the team
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+        '404':
+          description: The team was not found
+        '412':
+          description: The provided If-Match revision did not match the actual revision
+  /api/v3/team/{key}/member/{email}:
+    put:
+      tags:
+      - tenancy
+      summary: Add a member to a team
+      operationId: addTeamMember
+      parameters:
+      - name: key
+        in: path
+        description: The ID of the team, or `ext:<external id>`
+        required: true
+        schema:
+          type: string
+      - name: email
+        in: path
+        description: The e-mail address of the user
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: The user is a member of the team
+          headers:
+            etag:
+              schema:
+                type: string
+              description: Revision ID of the team
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+        '404':
+          description: The team was not found
+    delete:
+      tags:
+      - tenancy
+      summary: Remove a member from a team
+      operationId: removeTeamMember
+      parameters:
+      - name: key
+        in: path
+        description: The ID of the team, or `ext:<external id>`
+        required: true
+        schema:
+          type: string
+      - name: email
+        in: path
+        description: The e-mail address of the user
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: The user is not a member of the team
+          headers:
+            etag:
+              schema:
+                type: string
+              description: Revision ID of the team
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+        '404':
+          description: The team was not found
   /api/v3/ui/extract-sbom-purls:
     post:
       tags:
@@ -4074,6 +5123,336 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorInformation'
+  /api/v3/user:
+    get:
+      tags:
+      - tenancy
+      summary: List users
+      operationId: listUsers
+      parameters:
+      - name: q
+        in: query
+        description: |
+          EBNF grammar for the _q_ parameter:
+          ```text
+              q = ( values | filter ) { '&' q }
+              values = value { '|', values }
+              filter = field, operator, values
+              operator = "=" | "!=" | "~" | "!~" | ">=" | ">" | "<=" | "<"
+              value = (* any text but escape special characters with '\' *)
+              field = (* must match an entity attribute name *)
+          ```
+          Any values in a _q_ will result in a case-insensitive "full
+          text search", effectively producing an OR clause of LIKE
+          clauses for every string-ish field in the resource being
+          queried.
+
+          Examples:
+          - `foo` - any field containing 'foo'
+          - `foo|bar` - any field containing either 'foo' OR 'bar'
+          - `foo&bar` - some field contains 'foo' AND some field contains 'bar'
+
+          A _filter_ may also be used to constrain the results. The
+          filter's field name must correspond to one of the resource's
+          attributes. If it doesn't, an error will be returned
+          containing a list of the valid fields for that resource.
+
+          An ASCII value of `NUL`, percent-encoded as `%00`, may be used
+          to find resources on which a particular field isn't set. For
+          example, `name=%00` and `name!=%00` yield the WHERE clauses,
+          'NAME IS NULL' and 'NAME IS NOT NULL', respectively.
+
+          Examples:
+          - `name=foo` - entity's _name_ matches 'foo' exactly
+          - `name~foo` - entity's _name_ contains 'foo', case-insensitive
+          - `name~foo|bar` - entity's _name_ contains either 'foo' OR 'bar', case-insensitive
+          - `name=` - entity's _name_ is the empty string, ''
+          - `name=%00` - entity's _name_ isn't set
+          - `published>3 days ago` - date values can be "human time"
+
+          Multiple full text searches and/or filters should be
+          '&'-delimited -- they are logically AND'd together.
+
+          - `red hat|fedora&labels:type=cve|osv&published>last wednesday 17:00`
+
+          Fields corresponding to JSON objects in the database may use a
+          ':' to delimit the column name and the object key,
+          e.g. `purl:qualifiers:type=pom`
+
+          Any operator or special character, e.g. '|', '&', within a
+          value should be escaped by prefixing it with a backslash.
+        required: false
+        schema:
+          type: string
+      - name: sort
+        in: query
+        description: |
+          EBNF grammar for the _sort_ parameter:
+          ```text
+              sort = field [ ':', order ] { ',' sort }
+              order = ( "asc" | "desc" )
+              field = (* must match the name of entity's attributes *)
+          ```
+          The optional _order_ should be one of "asc" or "desc". If
+          omitted, the order defaults to "asc".
+
+          Each _field_ name must correspond to one of the columns of the
+          table holding the entities being queried. Those corresponding
+          to JSON objects in the database may use a ':' to delimit the
+          column name and the object key,
+          e.g. `purl:qualifiers:type:desc`
+        required: false
+        schema:
+          type: string
+      - name: offset
+        in: query
+        description: |-
+          The first item to return, skipping all that come before it.
+
+          NOTE: The order of items is defined by the API being called.
+        required: false
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+      - name: limit
+        in: query
+        description: |-
+          The maximum number of entries to return.
+
+          Zero means: return no items (the total count is still computed if requested).
+        required: false
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+      - name: total
+        in: query
+        description: Whether to compute and return the total count of matching items.
+        required: false
+        schema:
+          type: boolean
+      responses:
+        '200':
+          description: Matching users
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedResults_User'
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+  /api/v3/user/{email}:
+    get:
+      tags:
+      - tenancy
+      summary: Get a user
+      operationId: getUser
+      parameters:
+      - name: email
+        in: path
+        description: The e-mail address of the user
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: The user
+          headers:
+            etag:
+              schema:
+                type: string
+              description: Revision ID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+        '404':
+          description: The user was not found
+    put:
+      tags:
+      - tenancy
+      summary: Create or update a user
+      operationId: putUser
+      parameters:
+      - name: email
+        in: path
+        description: The e-mail address of the user
+        required: true
+        schema:
+          type: string
+      - name: if-match
+        in: header
+        description: The revision to update
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserRequest'
+        required: true
+      responses:
+        '200':
+          description: The user was updated
+          headers:
+            etag:
+              schema:
+                type: string
+              description: Revision ID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '201':
+          description: The user was created
+          headers:
+            etag:
+              schema:
+                type: string
+              description: Revision ID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+        '409':
+          description: The external ID is already in use
+        '412':
+          description: The provided If-Match revision did not match the actual revision
+    delete:
+      tags:
+      - tenancy
+      summary: Delete a user, including its team memberships and role bindings
+      operationId: deleteUser
+      parameters:
+      - name: email
+        in: path
+        description: The e-mail address of the user
+        required: true
+        schema:
+          type: string
+      - name: if-match
+        in: header
+        description: The revision to delete
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      responses:
+        '204':
+          description: The user was deleted, or did not exist
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+        '412':
+          description: The provided If-Match revision did not match the actual revision
+  /api/v3/user/{email}/access:
+    get:
+      tags:
+      - tenancy
+      summary: Get the role bindings applying to a user, directly or through teams
+      operationId: getUserAccess
+      parameters:
+      - name: email
+        in: path
+        description: The e-mail address of the user
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: The role bindings applying to the user
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Access'
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+        '404':
+          description: The user was not found
+  /api/v3/user/{email}/change-email:
+    post:
+      tags:
+      - tenancy
+      summary: Change the e-mail address of a user
+      operationId: changeUserEmail
+      parameters:
+      - name: email
+        in: path
+        description: The current e-mail address of the user
+        required: true
+        schema:
+          type: string
+      - name: if-match
+        in: header
+        description: The revision to update
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangeEmailRequest'
+        required: true
+      responses:
+        '200':
+          description: The e-mail address was changed
+          headers:
+            etag:
+              schema:
+                type: string
+              description: Revision ID
+            location:
+              schema:
+                type: string
+              description: The new location of the user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: The request was not valid
+        '401':
+          description: The user was not authenticated
+        '403':
+          description: The user authenticated, but not authorized for this operation
+        '404':
+          description: The user was not found
+        '409':
+          description: The new e-mail address is already in use
+        '412':
+          description: The provided If-Match revision did not match the actual revision
   /api/v3/userPreference/{key}:
     get:
       tags:
@@ -4438,6 +5817,21 @@ paths:
           description: The weakness could not be found
 components:
   schemas:
+    Access:
+      type: object
+      description: A role a user holds on a group, and all groups below it.
+      required:
+      - group
+      - role
+      - via
+      properties:
+        group:
+          type: string
+          description: The ID of the group the role was granted on.
+        role:
+          $ref: '#/components/schemas/Role'
+        via:
+          $ref: '#/components/schemas/Via'
     AdvisoryDetails:
       allOf:
       - $ref: '#/components/schemas/AdvisoryHead'
@@ -4710,6 +6104,188 @@ components:
         status:
           $ref: '#/components/schemas/ExploitIntelligenceJobStatus'
           description: Current lifecycle status of the job.
+    ApiKey:
+      type: object
+      description: An API key, without its secret.
+      required:
+      - id
+      - keyId
+      - name
+      - permissions
+      - groups
+      - state
+      - expiresAt
+      - createdAt
+      - createdBy
+      properties:
+        allowedCidrs:
+          type:
+          - array
+          - 'null'
+          items:
+            type: string
+          description: Network ranges (CIDR notation) the key may be used from, absent for any.
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+        defaultGroup:
+          type:
+          - string
+          - 'null'
+          description: The ID of the group uploads are assigned to, when they don't request any.
+        expiresAt:
+          type: string
+          format: date-time
+        externalId:
+          type:
+          - string
+          - 'null'
+          description: |-
+            An optional ID, assigned by an external system.
+
+            The key can also be addressed using the key `ext:<external_id>`.
+        groups:
+          type: array
+          items:
+            type: string
+          description: The IDs of the SBOM groups the key may upload into, including their descendants.
+        id:
+          type: string
+          description: The ID of the key, assigned by the system.
+        keyId:
+          type: string
+          description: The public part of the token, e.g. for correlating with logs.
+        labels:
+          $ref: '#/components/schemas/Labels'
+          description: Labels applied to every uploaded document.
+        lastUsedAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+          description: When the key was last used, with a granularity of a few minutes.
+        name:
+          type: string
+        permissions:
+          type: array
+          items:
+            type: string
+          description: The permissions granted by the key.
+        rotatedFrom:
+          type:
+          - string
+          - 'null'
+          description: The ID of the key this one replaced.
+        state:
+          $ref: '#/components/schemas/ApiKeyState'
+    ApiKeyPatch:
+      type: object
+      description: Changes to an API key. Scopes and expiration can only be changed by rotating the key.
+      properties:
+        allowedCidrs:
+          type:
+          - array
+          - 'null'
+          items:
+            type: string
+          description: Replace the network ranges the key may be used from. An empty list allows any.
+        labels:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/Labels'
+        name:
+          type:
+          - string
+          - 'null'
+    ApiKeyRequest:
+      type: object
+      description: Request to create a new API key.
+      required:
+      - name
+      - groups
+      - expiresAt
+      properties:
+        allowedCidrs:
+          type:
+          - array
+          - 'null'
+          items:
+            type: string
+          description: Network ranges (CIDR notation, e.g. `10.0.0.0/8`) the key may be used from.
+        defaultGroup:
+          type:
+          - string
+          - 'null'
+          description: |-
+            The group to assign uploads to, when they don't request any. Required when there is more
+            than one group. Must be one of the groups, or one of their descendants.
+        expiresAt:
+          type: string
+          format: date-time
+        externalId:
+          type:
+          - string
+          - 'null'
+          description: An optional ID, assigned by an external system, unique across all API keys.
+        groups:
+          type: array
+          items:
+            type: string
+          description: The SBOM groups the key may upload into, by ID or `ext:<external id>`.
+        labels:
+          $ref: '#/components/schemas/Labels'
+          description: Labels applied to every uploaded document, overriding labels of the upload request.
+        name:
+          type: string
+        permissions:
+          type:
+          - array
+          - 'null'
+          items:
+            type: string
+          description: |-
+            The permissions of the key. Currently, only `create.sbom` is supported, which is the
+            default.
+    ApiKeyState:
+      type: string
+      enum:
+      - active
+      - revoked
+    AuditEvent:
+      type: object
+      description: A recorded change to the tenancy configuration.
+      required:
+      - id
+      - at
+      - actorKind
+      - actorId
+      - action
+      - targetKind
+      - targetId
+      - detail
+      properties:
+        action:
+          type: string
+        actorId:
+          type: string
+        actorKind:
+          type: string
+          description: The kind of principal performing the change, e.g. `user` or `system`.
+        at:
+          type: string
+          format: date-time
+        detail:
+          type: object
+        id:
+          type: integer
+          format: int64
+        targetId:
+          type: string
+        targetKind:
+          type: string
+          description: The kind of the changed resource, e.g. `user`, `team`, `group`, or `api-key`.
     AuthConfig:
       type: object
       description: |-
@@ -4854,6 +6430,37 @@ components:
           type: string
     BinaryByteSize:
       type: string
+    Binding:
+      type: object
+      description: A role granted to a principal, on a group and all groups below it.
+      required:
+      - principal
+      - role
+      - createdAt
+      - createdBy
+      properties:
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+          description: The ID of the principal who created the binding.
+        principal:
+          $ref: '#/components/schemas/PrincipalRef'
+          description: The principal holding the role. Teams are referenced by their ID.
+        role:
+          $ref: '#/components/schemas/Role'
+    BindingRequest:
+      type: object
+      description: A role to grant to a principal.
+      required:
+      - principal
+      - role
+      properties:
+        principal:
+          $ref: '#/components/schemas/PrincipalRef'
+        role:
+          $ref: '#/components/schemas/Role'
     BulkAssignmentRequest:
       type: object
       description: Request to assign multiple SBOMs to the same set of groups.
@@ -4930,6 +6537,14 @@ components:
         size_human:
           $ref: '#/components/schemas/ByteSizeDef'
           description: A human-readable version of `size`
+    ChangeEmailRequest:
+      type: object
+      description: Request to change the e-mail address of a user.
+      required:
+      - newEmail
+      properties:
+        newEmail:
+          type: string
     ClearlyDefinedCurationImporter:
       allOf:
       - $ref: '#/components/schemas/CommonImporter'
@@ -5482,9 +7097,22 @@ components:
           - string
           - 'null'
           description: A user friendly description
+        external_id:
+          type:
+          - string
+          - 'null'
+          description: |-
+            An optional ID, assigned by an external system
+
+            The group can also be addressed using the key `ext:<external_id>`.
         id:
           type: string
           description: The ID of the group
+        kind:
+          type:
+          - string
+          - 'null'
+          description: An optional, free-form classification of the group, e.g. `organization` or `project`
         labels:
           $ref: '#/components/schemas/Labels'
           description: Additional group labels
@@ -5512,6 +7140,20 @@ components:
 
               Only present when `parents=resolve` is requested.
       description: Result of listing SBOM groups, with optional resolved parent references.
+    GroupPermissions:
+      type: object
+      description: The permissions granted in a group.
+      required:
+      - id
+      - permissions
+      properties:
+        id:
+          type: string
+          description: The ID of the group.
+        permissions:
+          type: array
+          items:
+            type: string
     GroupRequest:
       type: object
       description: Mutable properties of a [`Group`].
@@ -5523,6 +7165,16 @@ components:
           - string
           - 'null'
           description: A user provided description
+        external_id:
+          type:
+          - string
+          - 'null'
+          description: An optional ID, assigned by an external system, unique across all groups
+        kind:
+          type:
+          - string
+          - 'null'
+          description: An optional, free-form classification of the group, e.g. `organization` or `project`
         labels:
           $ref: '#/components/schemas/Labels'
         name:
@@ -5754,6 +7406,17 @@ components:
           items:
             type: string
           description: Warnings that occurred during the import process
+    IssuedApiKey:
+      allOf:
+      - $ref: '#/components/schemas/ApiKey'
+      - type: object
+        required:
+        - token
+        properties:
+          token:
+            type: string
+            description: The token to authenticate with. It is only returned once, and cannot be retrieved later.
+      description: A newly issued API key, including its token.
     KevImporter:
       allOf:
       - $ref: '#/components/schemas/CommonImporter'
@@ -5834,6 +7497,93 @@ components:
       properties:
         license:
           type: string
+    Me:
+      type: object
+      description: Information about the calling user.
+      required:
+      - permissions
+      - access
+      - scoped
+      properties:
+        access:
+          type: array
+          items:
+            $ref: '#/components/schemas/Access'
+          description: Roles on SBOM groups, granted to the user directly or through teams.
+        effectivePermissions:
+          type:
+          - array
+          - 'null'
+          items:
+            type: string
+          description: |-
+            The permissions which can actually be used, in at least one group when scoped.
+
+            This is intended for deciding which actions to offer. `None` means all permissions, e.g.
+            when authentication is disabled.
+        groups:
+          type: array
+          items:
+            $ref: '#/components/schemas/GroupPermissions'
+          description: The groups accessible when scoped, including descendants of bound groups.
+        permissions:
+          type: array
+          items:
+            type: string
+          description: Global permissions, granted through the access token.
+        scoped:
+          type: boolean
+          description: Whether access to SBOMs is limited to the groups in [`Self::groups`].
+        subject:
+          type:
+          - string
+          - 'null'
+          description: The subject of the access token, absent for anonymous requests.
+        user:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/User'
+            description: The user linked to the access token, absent if there is none.
+    Member:
+      type: object
+      description: A member of a team.
+      required:
+      - email
+      - state
+      properties:
+        displayName:
+          type:
+          - string
+          - 'null'
+        email:
+          type: string
+        state:
+          $ref: '#/components/schemas/UserState'
+    MembersPatch:
+      type: object
+      description: Add and remove members of a team.
+      properties:
+        add:
+          type: array
+          items:
+            type: string
+          description: E-mail addresses of members to add. Unknown users will be created as invited.
+        remove:
+          type: array
+          items:
+            type: string
+          description: E-mail addresses of members to remove.
+    MembersRequest:
+      type: object
+      description: Replace all members of a team.
+      required:
+      - emails
+      properties:
+        emails:
+          type: array
+          items:
+            type: string
+          description: The e-mail addresses of the members. Unknown users will be created as invited.
     Message:
       type: object
       required:
@@ -6003,6 +7753,141 @@ components:
                   items:
                     $ref: '#/components/schemas/AdvisoryVulnerabilityHead'
                   description: Vulnerabilities addressed within this advisory.
+        total:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 0
+    PaginatedResults_ApiKey:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            description: An API key, without its secret.
+            required:
+            - id
+            - keyId
+            - name
+            - permissions
+            - groups
+            - state
+            - expiresAt
+            - createdAt
+            - createdBy
+            properties:
+              allowedCidrs:
+                type:
+                - array
+                - 'null'
+                items:
+                  type: string
+                description: Network ranges (CIDR notation) the key may be used from, absent for any.
+              createdAt:
+                type: string
+                format: date-time
+              createdBy:
+                type: string
+              defaultGroup:
+                type:
+                - string
+                - 'null'
+                description: The ID of the group uploads are assigned to, when they don't request any.
+              expiresAt:
+                type: string
+                format: date-time
+              externalId:
+                type:
+                - string
+                - 'null'
+                description: |-
+                  An optional ID, assigned by an external system.
+
+                  The key can also be addressed using the key `ext:<external_id>`.
+              groups:
+                type: array
+                items:
+                  type: string
+                description: The IDs of the SBOM groups the key may upload into, including their descendants.
+              id:
+                type: string
+                description: The ID of the key, assigned by the system.
+              keyId:
+                type: string
+                description: The public part of the token, e.g. for correlating with logs.
+              labels:
+                $ref: '#/components/schemas/Labels'
+                description: Labels applied to every uploaded document.
+              lastUsedAt:
+                type:
+                - string
+                - 'null'
+                format: date-time
+                description: When the key was last used, with a granularity of a few minutes.
+              name:
+                type: string
+              permissions:
+                type: array
+                items:
+                  type: string
+                description: The permissions granted by the key.
+              rotatedFrom:
+                type:
+                - string
+                - 'null'
+                description: The ID of the key this one replaced.
+              state:
+                $ref: '#/components/schemas/ApiKeyState'
+        total:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 0
+    PaginatedResults_AuditEvent:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            description: A recorded change to the tenancy configuration.
+            required:
+            - id
+            - at
+            - actorKind
+            - actorId
+            - action
+            - targetKind
+            - targetId
+            - detail
+            properties:
+              action:
+                type: string
+              actorId:
+                type: string
+              actorKind:
+                type: string
+                description: The kind of principal performing the change, e.g. `user` or `system`.
+              at:
+                type: string
+                format: date-time
+              detail:
+                type: object
+              id:
+                type: integer
+                format: int64
+              targetId:
+                type: string
+              targetKind:
+                type: string
+                description: The kind of the changed resource, e.g. `user`, `team`, `group`, or `api-key`.
         total:
           type:
           - integer
@@ -6322,6 +8207,34 @@ components:
             properties:
               license:
                 type: string
+        total:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 0
+    PaginatedResults_Member:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            description: A member of a team.
+            required:
+            - email
+            - state
+            properties:
+              displayName:
+                type:
+                - string
+                - 'null'
+              email:
+                type: string
+              state:
+                $ref: '#/components/schemas/UserState'
         total:
           type:
           - integer
@@ -6786,6 +8699,90 @@ components:
           - 'null'
           format: int64
           minimum: 0
+    PaginatedResults_Team:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            description: A team, a set of users, which can be granted roles as a unit.
+            required:
+            - id
+            - name
+            properties:
+              description:
+                type:
+                - string
+                - 'null'
+              externalId:
+                type:
+                - string
+                - 'null'
+                description: |-
+                  An optional ID, assigned by an external system.
+
+                  The team can also be addressed using the key `ext:<external_id>`.
+              id:
+                type: string
+                description: The ID of the team, assigned by the system.
+              name:
+                type: string
+        total:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 0
+    PaginatedResults_User:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            description: A user, identified by their e-mail address.
+            required:
+            - id
+            - email
+            - state
+            - createdAt
+            properties:
+              createdAt:
+                type: string
+                format: date-time
+              displayName:
+                type:
+                - string
+                - 'null'
+              email:
+                type: string
+                description: The e-mail address, lower-cased.
+              externalId:
+                type:
+                - string
+                - 'null'
+                description: An optional ID, assigned by an external system.
+              id:
+                type: string
+                description: The ID of the user, assigned by the system.
+              lastLogin:
+                type:
+                - string
+                - 'null'
+                format: date-time
+              state:
+                $ref: '#/components/schemas/UserState'
+        total:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 0
     PaginatedResults_VulnerabilitySummary:
       type: object
       required:
@@ -6827,6 +8824,25 @@ components:
           items:
             type: string
           description: The IDs of the SBOMs to update.
+    PrincipalRef:
+      oneOf:
+      - type: object
+        description: The e-mail address of a user.
+        required:
+        - user
+        properties:
+          user:
+            type: string
+            description: The e-mail address of a user.
+      - type: object
+        description: The ID of a team, or `ext:<external id>`.
+        required:
+        - team
+        properties:
+          team:
+            type: string
+            description: The ID of a team, or `ext:<external id>`.
+      description: 'A reference to a principal: a user by e-mail, or a team by key.'
     ProductDetails:
       allOf:
       - $ref: '#/components/schemas/ProductHead'
@@ -7385,6 +9401,35 @@ components:
             properties:
               name:
                 type: string
+    Role:
+      type: string
+      description: A role on an SBOM group, each role includes all permissions of the ones before it.
+      enum:
+      - viewer
+      - uploader
+      - editor
+      - admin
+    RoleRequest:
+      type: object
+      description: A role to grant.
+      required:
+      - role
+      properties:
+        role:
+          $ref: '#/components/schemas/Role'
+    RotateRequest:
+      type: object
+      description: Request to rotate an API key.
+      required:
+      - expiresAt
+      properties:
+        expiresAt:
+          type: string
+          format: date-time
+          description: When the new key expires.
+        gracePeriod:
+          type: string
+          description: How long the old key stays valid (humantime, e.g. "24h"), at most 7 days.
     SbomAdvisory:
       allOf:
       - $ref: '#/components/schemas/AdvisoryHead'
@@ -7758,6 +9803,47 @@ components:
         properties:
           cpe:
             type: string
+    Team:
+      type: object
+      description: A team, a set of users, which can be granted roles as a unit.
+      required:
+      - id
+      - name
+      properties:
+        description:
+          type:
+          - string
+          - 'null'
+        externalId:
+          type:
+          - string
+          - 'null'
+          description: |-
+            An optional ID, assigned by an external system.
+
+            The team can also be addressed using the key `ext:<external_id>`.
+        id:
+          type: string
+          description: The ID of the team, assigned by the system.
+        name:
+          type: string
+    TeamRequest:
+      type: object
+      description: Mutable properties of a [`Team`].
+      required:
+      - name
+      properties:
+        description:
+          type:
+          - string
+          - 'null'
+        externalId:
+          type:
+          - string
+          - 'null'
+          description: An optional ID, assigned by an external system, unique across all teams.
+        name:
+          type: string
     Update:
       type: object
       description: |
@@ -7768,6 +9854,62 @@ components:
         oneOf:
         - type: 'null'
         - type: string
+    User:
+      type: object
+      description: A user, identified by their e-mail address.
+      required:
+      - id
+      - email
+      - state
+      - createdAt
+      properties:
+        createdAt:
+          type: string
+          format: date-time
+        displayName:
+          type:
+          - string
+          - 'null'
+        email:
+          type: string
+          description: The e-mail address, lower-cased.
+        externalId:
+          type:
+          - string
+          - 'null'
+          description: An optional ID, assigned by an external system.
+        id:
+          type: string
+          description: The ID of the user, assigned by the system.
+        lastLogin:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        state:
+          $ref: '#/components/schemas/UserState'
+    UserRequest:
+      type: object
+      description: Mutable properties of a [`User`].
+      properties:
+        disabled:
+          type: boolean
+          description: Prevent the user from signing in. Existing role bindings are kept.
+        displayName:
+          type:
+          - string
+          - 'null'
+        externalId:
+          type:
+          - string
+          - 'null'
+          description: An optional ID, assigned by an external system, unique across all users.
+    UserState:
+      type: string
+      enum:
+      - invited
+      - active
+      - disabled
     VersionRange:
       oneOf:
       - type: object
@@ -7894,6 +10036,31 @@ components:
         properties:
           Other:
             type: string
+    Via:
+      oneOf:
+      - type: object
+        description: Directly bound to the user.
+        required:
+        - kind
+        properties:
+          kind:
+            type: string
+            enum:
+            - direct
+      - type: object
+        description: Bound to a team the user is a member of.
+        required:
+        - id
+        - kind
+        properties:
+          id:
+            type: string
+            description: The ID of the team
+          kind:
+            type: string
+            enum:
+            - team
+      description: How access was granted to a user.
     VulnerabilityAdvisoryHead:
       allOf:
       - $ref: '#/components/schemas/AdvisoryHead'
