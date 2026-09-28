@@ -458,3 +458,66 @@ async fn recommend_report(ctx: &TrustifyContext) -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[test_context(TrustifyContext)]
+#[test(actix_web::test)]
+async fn sbom_permissions(ctx: &TrustifyContext) -> anyhow::Result<()> {
+    let app = caller(ctx).await?;
+    let t = Tenants::new(ctx).await?;
+
+    let permissions = |scope: Option<AccessScope>| {
+        let body = json!([t.sbom_a, t.sbom_b, "not-an-id", Uuid::now_v7()]);
+        let app = &app;
+        async move {
+            let request = TestRequest::post()
+                .uri("/api/v3/sbom-permissions")
+                .set_json(body);
+            let request = match &scope {
+                Some(scope) => scoped(request, scope),
+                None => request.to_request(),
+            };
+            app.call_and_read_body_json::<Value>(request).await
+        }
+    };
+
+    // unrestricted: all SBOMs which exist, with all permissions
+    assert_eq!(
+        permissions(None).await,
+        json!({
+            &t.sbom_a: ["read.sbom", "update.sbom", "delete.sbom"],
+            &t.sbom_b: ["read.sbom", "update.sbom", "delete.sbom"],
+        })
+    );
+
+    // scoped: permissions of the groups, SBOMs of other groups are omitted
+    assert_eq!(
+        permissions(Some(editor(t.a))).await,
+        json!({ &t.sbom_a: ["read.sbom", "update.sbom", "delete.sbom"] })
+    );
+
+    let mut groups = HashMap::new();
+    groups.insert(
+        t.a,
+        HashSet::from([Permission::ReadSbom, Permission::UpdateSbom]),
+    );
+    groups.insert(t.b, HashSet::from([Permission::ReadSbom]));
+    assert_eq!(
+        permissions(Some(AccessScope::scoped(groups))).await,
+        json!({
+            &t.sbom_a: ["read.sbom", "update.sbom"],
+            &t.sbom_b: ["read.sbom"],
+        })
+    );
+
+    // the number of SBOMs is limited
+    let request = TestRequest::post()
+        .uri("/api/v3/sbom-permissions")
+        .set_json(vec![Uuid::now_v7().to_string(); 1001])
+        .to_request();
+    assert_eq!(
+        app.call_service(request).await.status(),
+        StatusCode::BAD_REQUEST
+    );
+
+    Ok(())
+}

@@ -39,6 +39,13 @@ The calling user, its global permissions, and its roles can be retrieved using:
 http GET localhost:8080/api/v3/me
 ```
 
+The permissions which apply to individual SBOMs, e.g. for deciding which actions to offer per SBOM,
+can be retrieved using (SBOMs which aren't visible are omitted):
+
+```bash
+echo '["<sbom-id>", "<sbom-id>"]' | http POST localhost:8080/api/v3/sbom-permissions
+```
+
 ## Groups
 
 ```bash
