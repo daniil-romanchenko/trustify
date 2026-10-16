@@ -531,3 +531,72 @@ async fn sbom_permissions(ctx: &TrustifyContext) -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[test_context(TrustifyContext)]
+#[test(actix_web::test)]
+async fn crypto(ctx: &TrustifyContext) -> anyhow::Result<()> {
+    let app = caller(ctx).await?;
+
+    let a = group("A", ctx).await?;
+    let b = group("B", ctx).await?;
+    let cbom = sbom("cyclonedx/cryptographic/keycloak-cbom.json", a, ctx).await?;
+
+    let total = |result: &Value| result["total"].as_u64().unwrap_or(0);
+    let get = |uri: String, scope: &AccessScope| scoped(TestRequest::get().uri(&uri), scope);
+
+    // visible in its own group
+    let result: Value = app
+        .call_and_read_body_json(get(
+            "/api/v3/crypto/algorithm?total=true".into(),
+            &viewer(a),
+        ))
+        .await;
+    assert!(total(&result) > 0);
+    let result: Value = app
+        .call_and_read_body_json(get("/api/v3/crypto/summary".into(), &viewer(a)))
+        .await;
+    assert!(result["total_algorithms"].as_i64().unwrap_or(0) > 0);
+
+    // invisible elsewhere
+    let result: Value = app
+        .call_and_read_body_json(get(
+            "/api/v3/crypto/algorithm?total=true".into(),
+            &viewer(b),
+        ))
+        .await;
+    assert_eq!(total(&result), 0);
+    let result: Value = app
+        .call_and_read_body_json(get("/api/v3/crypto/summary".into(), &viewer(b)))
+        .await;
+    assert_eq!(result["total_algorithms"], 0);
+    let result: Value = app
+        .call_and_read_body_json(scoped(
+            TestRequest::post()
+                .uri("/api/v3/crypto/policy/evaluate")
+                .set_json(json!({})),
+            &viewer(b),
+        ))
+        .await;
+    assert_eq!(result["summary"]["total"], 0);
+
+    // addressing the SBOM directly
+    let response = app
+        .call_service(get(format!("/api/v3/sbom/{cbom}/crypto"), &viewer(b)))
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let response = app
+        .call_service(get(format!("/api/v3/sbom/{cbom}/crypto"), &viewer(a)))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = app
+        .call_service(scoped(
+            TestRequest::post()
+                .uri("/api/v3/crypto/policy/evaluate")
+                .set_json(json!({ "sbom_id": cbom })),
+            &viewer(b),
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    Ok(())
+}

@@ -2,6 +2,7 @@ pub mod policy;
 
 use crate::{
     Error,
+    common::access::sboms_in_groups,
     crypto::{
         model::{
             AlgorithmPolicyResult, CryptoAlgorithmSummary, CryptoSummary, PolicyEvaluationResponse,
@@ -12,7 +13,7 @@ use crate::{
 };
 use sea_orm::{
     ActiveValue::Set, ColumnTrait, Condition, ConnectionTrait, EntityTrait, JoinType, LoaderTrait,
-    QueryFilter, QueryOrder, QuerySelect, RelationTrait,
+    QueryFilter, QueryOrder, QuerySelect, RelationTrait, Select,
 };
 use sea_query::OnConflict;
 use std::collections::{HashMap, HashSet};
@@ -48,9 +49,10 @@ impl CryptoService {
         paginated: impl Pagination,
         asset_type: Option<CryptoAssetType>,
         sbom_id: Option<Uuid>,
+        visible: Option<Vec<Uuid>>,
         connection: &C,
     ) -> Result<PaginatedResults<CryptoAlgorithmSummary>, Error> {
-        let mut select = sbom_crypto::Entity::find()
+        let mut select = visible_only(sbom_crypto::Entity::find(), visible.clone())
             .join(JoinType::InnerJoin, sbom_node::Relation::Crypto.def().rev());
 
         if let Some(at) = asset_type {
@@ -83,7 +85,7 @@ impl CryptoService {
             .zip(&nodes)
             .filter_map(|(_, n)| n.as_ref().map(|n| n.name.clone()))
             .collect();
-        let sbom_counts = self.batch_sboms_count(&names, connection).await?;
+        let sbom_counts = self.batch_sboms_count(&names, visible, connection).await?;
 
         let algo_names: Vec<String> = items
             .iter()
@@ -243,13 +245,14 @@ impl CryptoService {
             .collect())
     }
 
-    /// Compute aggregate KPI metrics across all SBOMs.
+    /// Compute aggregate KPI metrics across all visible SBOMs.
     #[instrument(skip_all, err(level = tracing::Level::INFO))]
     pub async fn fetch_summary<C: ConnectionTrait>(
         &self,
+        visible: Option<Vec<Uuid>>,
         connection: &C,
     ) -> Result<CryptoSummary, Error> {
-        let all_algos = sbom_crypto::Entity::find()
+        let all_algos = visible_only(sbom_crypto::Entity::find(), visible)
             .filter(sbom_crypto::Column::AssetType.eq(CryptoAssetType::Algorithm))
             .all(connection)
             .await?;
@@ -334,6 +337,7 @@ impl CryptoService {
     async fn batch_sboms_count<C: ConnectionTrait>(
         &self,
         names: &[String],
+        visible: Option<Vec<Uuid>>,
         connection: &C,
     ) -> Result<HashMap<String, i64>, Error> {
         if names.is_empty() {
@@ -347,7 +351,7 @@ impl CryptoService {
             .into_iter()
             .collect();
 
-        let rows: Vec<(Uuid, String)> = sbom_crypto::Entity::find()
+        let rows: Vec<(Uuid, String)> = visible_only(sbom_crypto::Entity::find(), visible)
             .join(JoinType::InnerJoin, sbom_node::Relation::Crypto.def().rev())
             .select_only()
             .column(sbom_crypto::Column::SbomId)
@@ -408,9 +412,10 @@ impl CryptoService {
     pub async fn evaluate_policy<C: ConnectionTrait>(
         &self,
         sbom_id: Option<Uuid>,
+        visible: Option<Vec<Uuid>>,
         connection: &C,
     ) -> Result<PolicyEvaluationResponse, Error> {
-        let mut query = sbom_crypto::Entity::find()
+        let mut query = visible_only(sbom_crypto::Entity::find(), visible)
             .filter(sbom_crypto::Column::AssetType.eq(CryptoAssetType::Algorithm));
 
         if let Some(id) = sbom_id {
@@ -454,5 +459,18 @@ impl CryptoService {
         };
 
         Ok(PolicyEvaluationResponse { summary, results })
+    }
+}
+
+/// Limit crypto assets to SBOMs assigned to one of the groups, `None` for no restriction.
+fn visible_only(
+    select: Select<sbom_crypto::Entity>,
+    visible: Option<Vec<Uuid>>,
+) -> Select<sbom_crypto::Entity> {
+    match visible {
+        Some(groups) => {
+            select.filter(sbom_crypto::Column::SbomId.in_subquery(sboms_in_groups(groups)))
+        }
+        None => select,
     }
 }

@@ -1,5 +1,6 @@
 use crate::{
     Error,
+    common::access::{require_sbom, visible_groups},
     crypto::{
         model::{
             CryptoAlgorithmSummary, CryptoSummary, PolicyEvaluationRequest,
@@ -11,9 +12,13 @@ use crate::{
 };
 use actix_web::{HttpResponse, Responder, get, http::header, post, web};
 use sea_orm::TransactionTrait;
-use trustify_auth::{CreateMetadata, ReadSbom, authorizer::Require};
+use trustify_auth::{
+    CreateMetadata, Permission, ReadSbom,
+    authorizer::{AccessScope, Require},
+};
 use trustify_common::{
     db::{self, pagination_cache::PaginationCache, query::Query},
+    id::Id,
     model::{Paginated, PaginatedResults},
 };
 use trustify_entity::sbom_crypto::CryptoAssetType;
@@ -64,12 +69,20 @@ pub async fn list_algorithms(
     web::Query(search): web::Query<Query>,
     web::Query(paginated): web::Query<Paginated>,
     web::Query(filter): web::Query<CryptoFilterParams>,
+    scope: AccessScope,
     _: Require<ReadSbom>,
 ) -> actix_web::Result<impl Responder> {
     let tx = db.begin().await?;
     Ok(HttpResponse::Ok().json(
         state
-            .list_algorithms(search, paginated, filter.asset_type, None, &tx)
+            .list_algorithms(
+                search,
+                paginated,
+                filter.asset_type,
+                None,
+                visible_groups(&scope),
+                &tx,
+            )
             .await?,
     ))
 }
@@ -85,10 +98,11 @@ pub async fn list_algorithms(
 pub async fn get_summary(
     state: web::Data<CryptoService>,
     db: web::Data<db::ReadOnly>,
+    scope: AccessScope,
     _: Require<ReadSbom>,
 ) -> actix_web::Result<impl Responder> {
     let tx = db.begin().await?;
-    Ok(HttpResponse::Ok().json(state.fetch_summary(&tx).await?))
+    Ok(HttpResponse::Ok().json(state.fetch_summary(visible_groups(&scope), &tx).await?))
 }
 
 #[utoipa::path(
@@ -105,6 +119,7 @@ pub async fn get_summary(
     ),
 )]
 #[get("/v3/sbom/{id}/crypto")]
+#[allow(clippy::too_many_arguments)]
 pub async fn list_sbom_crypto(
     state: web::Data<CryptoService>,
     db: web::Data<db::ReadOnly>,
@@ -112,16 +127,20 @@ pub async fn list_sbom_crypto(
     web::Query(search): web::Query<Query>,
     web::Query(paginated): web::Query<Paginated>,
     web::Query(filter): web::Query<CryptoFilterParams>,
+    scope: AccessScope,
     _: Require<ReadSbom>,
 ) -> actix_web::Result<impl Responder> {
+    let id = id.into_inner();
     let tx = db.begin().await?;
+    require_sbom(&scope, Permission::ReadSbom, &Id::Uuid(id), &tx).await?;
     Ok(HttpResponse::Ok().json(
         state
             .list_algorithms(
                 search,
                 paginated,
                 filter.asset_type,
-                Some(id.into_inner()),
+                Some(id),
+                visible_groups(&scope),
                 &tx,
             )
             .await?,
@@ -141,10 +160,18 @@ pub async fn evaluate_policy(
     state: web::Data<CryptoService>,
     db: web::Data<db::ReadOnly>,
     body: web::Json<PolicyEvaluationRequest>,
+    scope: AccessScope,
     _: Require<ReadSbom>,
 ) -> actix_web::Result<impl Responder> {
     let tx = db.begin().await?;
-    Ok(HttpResponse::Ok().json(state.evaluate_policy(body.sbom_id, &tx).await?))
+    if let Some(id) = body.sbom_id {
+        require_sbom(&scope, Permission::ReadSbom, &Id::Uuid(id), &tx).await?;
+    }
+    Ok(HttpResponse::Ok().json(
+        state
+            .evaluate_policy(body.sbom_id, visible_groups(&scope), &tx)
+            .await?,
+    ))
 }
 
 /// Converts empty-string optional fields (from CSV blank columns) to `None`.
